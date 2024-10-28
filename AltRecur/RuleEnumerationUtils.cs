@@ -71,14 +71,16 @@ namespace AltRecur
 
         public static LocalDateTimeAndPeriod NextInterval(LocalDateTime dtStart, LocalDateTime t, PeriodUnits unit, int interval)
         {
-            if (t < dtStart)
-                return new(dtStart, GetPeriod(unit, interval));
-
             var dt = Period.Between(dtStart, t, unit);
-            var dUnits = GetPeriodUnits(dt, unit);
-            var inc = GetPeriod(unit, ((dUnits / interval) + 1) * interval);
+            if (t < (dtStart + dt))
+                dt = dt - GetPeriod(unit);
 
-            return new(dtStart.Plus(inc), GetPeriod(unit, interval));
+            var dUnits = GetPeriodUnits(dt, unit);
+            var incUnits = dUnits - ((dUnits % interval) + interval) % interval + interval;
+            var inc = GetPeriod(unit, incUnits);
+
+            var res = dtStart.Plus(inc);
+            return new(res, GetPeriod(unit, 1));
         }
 
         private static LocalDateTimeAndPeriod FindCurrentOrNextByWeekDay(LocalDateTime t, IsoDayOfWeek[] by)
@@ -182,11 +184,14 @@ namespace AltRecur
             public LocalDateTimeAndPeriod Value { get; set; } = value;
         }
 
-        public static IEnumerable<LocalDateTime> Enumerate(LocalDateTime dtStart, IncTimeDelegate[] components)
+        public static IEnumerable<LocalDateTime> Enumerate(LocalDateTime start, LocalDateTime? end, IncTimeDelegate[] components)
         {
-            var state = components.Select(x => (del: x, t: new LocalDateTimeAndPeriodHolder(x(dtStart.PlusTicks(-1))))).ToArray();
+            var state = components.Select(x => (del: x, t: new LocalDateTimeAndPeriodHolder(x(start.PlusTicks(-1))))).ToArray();
             while (true)
             {
+                if ((end != null) && (state.First().t.Value.T >= end))
+                    break;
+
                 var comb = state.Select(x => x.t.Value).IntersectDt();
 
                 if (comb != null)
