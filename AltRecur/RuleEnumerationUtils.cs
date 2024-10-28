@@ -98,7 +98,7 @@ namespace AltRecur
             var byWithoutOrd = by.Where(x => !x.ord.HasValue).Select(x => x.dow).ToArray();
 
             LocalDateTimeAndPeriod[] t1 = byWithOrd.Any() ? [FindCurrentOrNextByDayWithOrd(t, outerUnit, byWithOrd)] : [];
-            LocalDateTimeAndPeriod[] t2 = byWithOrd.Any() ? [FindCurrentOrNextByWeekDay(t, byWithoutOrd)] : [];
+            LocalDateTimeAndPeriod[] t2 = byWithoutOrd.Any() ? [FindCurrentOrNextByWeekDay(t, byWithoutOrd)] : [];
 
             LocalDateTimeAndPeriod[] candidates = [.. t1, .. t2];
 
