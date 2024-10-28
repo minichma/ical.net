@@ -1,27 +1,9 @@
 ﻿using NodaTime;
-using NodaTime.Extensions;
 
 namespace AltRecur
 {
     public static class RuleEnumerationUtils
     {
-        //public static IEnumerable<LocalDateTime> Seconds(ISkipToken skipToken, int interval)
-        //    => Enumerate(skipToken, Period.FromSeconds(interval));
-
-        //public static IEnumerable<LocalDateTime> Enumerate(ISkipToken skipToken, Period period)
-        //{
-        //    var next = skipToken.SkipTo;
-        //    while (true)
-        //    {
-        //        if (next < skipToken.SkipTo)
-        //            next = skipToken.SkipTo;
-
-        //        yield return next;
-
-        //        next = next.Plus(period);
-        //    }
-        //}
-
         private static LocalDateTime FloorTo(LocalDateTime t, PeriodUnits PeriodUnits)
         {
             var b = new PeriodBuilder();
@@ -87,14 +69,6 @@ namespace AltRecur
                 _ => throw new ApplicationException()
             };
 
-        //private static int GetIncsInOuterPeriodUnits(LocalDateTime t, PeriodUnits innerPeriodUnits)
-        //{
-        //    var tStart = FloorTo(t, innerPeriodUnits + 1);
-        //    var tNext = t.Plus(GetPeriod(innerPeriodUnits + 1));
-
-        //    var diff = tNext.Minus(tStart);
-        //}
-
         public static LocalDateTimeAndPeriod NextInterval(LocalDateTime dtStart, LocalDateTime t, PeriodUnits unit, int interval)
         {
             if (t < dtStart)
@@ -107,7 +81,60 @@ namespace AltRecur
             return new(dtStart.Plus(inc), GetPeriod(unit, interval));
         }
 
+        private static LocalDateTimeAndPeriod FindCurrentOrNextByWeekDay(LocalDateTime t, IsoDayOfWeek[] by)
+        {
+            // Floor to period boundary (start of sec, min, hour)
+            t = t.Date.AtMidnight();
+
+            while (!by.Contains(t.DayOfWeek))
+                t = t.PlusDays(1);
+
+            return new(t, Period.FromDays(1));
+        }
+
+        public static LocalDateTimeAndPeriod FindCurrentOrNextByDay(LocalDateTime t, PeriodUnits outerUnit, (IsoDayOfWeek dow, int? ord)[] by)
+        {
+            var byWithOrd = by.Where(x => x.ord.HasValue).Select(x => (x.dow, ord: x.ord!.Value)).ToArray();
+            var byWithoutOrd = by.Where(x => !x.ord.HasValue).Select(x => x.dow).ToArray();
+
+            LocalDateTimeAndPeriod[] t1 = byWithOrd.Any() ? [FindCurrentOrNextByDayWithOrd(t, outerUnit, byWithOrd)] : [];
+            LocalDateTimeAndPeriod[] t2 = byWithOrd.Any() ? [FindCurrentOrNextByWeekDay(t, byWithoutOrd)] : [];
+
+            LocalDateTimeAndPeriod[] candidates = [.. t1, .. t2];
+
+            var res = candidates.MinBy(x => x.T);
+            return res!;
+        }
+
+        private static LocalDateTimeAndPeriod FindCurrentOrNextByDayWithOrd(LocalDateTime t, PeriodUnits outerUnit, (IsoDayOfWeek dow, int ord)[] by)
+            => FindCurrentOrNextBy(t, outerUnit, PeriodUnits.Days, periodStart => GetByDaysWithOrd(periodStart, outerUnit, by));
+
+        private static int[] GetByDaysWithOrd(LocalDateTime t, PeriodUnits outerUnit, (IsoDayOfWeek dow, int ord)[] by)
+        {
+            var totalIncs = GetPeriodUnits(Period.Between(t, t.Plus(GetPeriod(outerUnit)), PeriodUnits.Days), PeriodUnits.Days);
+            var startDoW = t.DayOfWeek;
+
+            var res = by.Select(x => GetMonthOrYearDayFromDowAndOrd(startDoW, totalIncs, x.dow, x.ord));
+
+            res = res.Where(x => (x >= 1) && (x < (totalIncs + 1)));
+            return res.ToArray();
+        }
+
+        private static int GetMonthOrYearDayFromDowAndOrd(IsoDayOfWeek startDoW, int totalDays, IsoDayOfWeek dow, int ord)
+        {
+            if (ord < 0)
+            {
+                var nofDowInPeriod = ((totalDays - (dow - startDoW + 7) % 7) + 6) / 7;
+                ord = nofDowInPeriod + 1 + ord;
+            }
+
+            return ((ord - 1) * 7) + (dow - startDoW + 7) % 7 + 1;
+        }
+
         public static LocalDateTimeAndPeriod FindCurrentOrNextBy(LocalDateTime t, PeriodUnits outerUnit, PeriodUnits innerUnit, int[] by, bool supportNegative = false)
+            => FindCurrentOrNextBy(t, outerUnit, innerUnit, t => PrepareByArray(t, outerUnit, innerUnit, by, supportNegative));
+
+        private static LocalDateTimeAndPeriod FindCurrentOrNextBy(LocalDateTime t, PeriodUnits outerUnit, PeriodUnits innerUnit, Func<LocalDateTime, int[]> getByByPeriod)
         {
             // Floor to period boundary (start of sec, min, hour)
             var outerStart = FloorTo(t, outerUnit);
@@ -116,7 +143,7 @@ namespace AltRecur
             int next;
             do
             {
-                var preparedBy = PrepareByArray(outerStart, outerUnit, innerUnit, by, supportNegative);
+                var preparedBy = getByByPeriod(outerStart);
 
                 next = first
                     ? preparedBy.Where(x => x >= GetUnitFromLocalDateTime(t, innerUnit)).FirstOrDefault(-1)
@@ -125,7 +152,7 @@ namespace AltRecur
                 if (next < 0)
                 {
                     outerStart = outerStart.Plus(GetPeriod(outerUnit));
-                    preparedBy = PrepareByArray(outerStart, outerUnit, innerUnit, by, supportNegative);
+                    preparedBy = getByByPeriod(outerStart);
                 }
 
                 first = false;
@@ -133,7 +160,7 @@ namespace AltRecur
 
             outerStart = outerStart.Plus(GetPeriod(innerUnit, next - GetUnitFromLocalDateTime(outerStart, innerUnit)));
 
-            return new(outerStart, GetPeriod(innerUnit, 1));
+            return new(outerStart, GetPeriod(innerUnit));
         }
 
         private static int[] PrepareByArray(LocalDateTime t, PeriodUnits outerUnit, PeriodUnits innerUnit, int[] by, bool supportNegative)
@@ -147,16 +174,6 @@ namespace AltRecur
             by = by.Where(x => (x >= v0) && (x < (totalIncs + v0))).ToArray();
             return by;
         }
-
-        //public static IEnumerable<LocalDateTimeAndPeriod> EnumerateInterval(LocalDateTime start, PeriodUnits unit, int interval)
-        //{
-        //    var t = start;
-        //    while (true)
-        //    {
-        //        yield return new(t, Period.FromTicks(1));
-        //        t = NextInterval(start, t, unit, interval);
-        //    }
-        //}
 
         public delegate LocalDateTimeAndPeriod IncTimeDelegate(LocalDateTime t);
 
@@ -185,64 +202,6 @@ namespace AltRecur
                     foreach (var item in state.Where(x => (x.t.Value.T + x.t.Value.Period) <= maxStart))
                         item.t.Value = item.del(maxStart);
                 }
-            }
-        }
-
-        //public static IEnumerable<LocalDateTimeAndPeriod> EnumerateBy(LocalDateTime start, PeriodUnits outerUnit, PeriodUnits innerUnit, int[] by, bool supportNegative = false)
-        //{
-        //    var t = FloorTo(start, innerUnit);
-        //    var period = GetPeriod(innerUnit);
-        //    while (true)
-        //    {
-        //        yield return new(t, period);
-        //        t = NextTime(t, outerUnit, innerUnit, by, supportNegative);
-        //    }
-        //}
-
-        public static IEnumerable<LocalDateTimeAndPeriod> EnumerateByYearDay(LocalDate start, int[] by)
-            => EnumerateByYearOrMonthDay(new LocalDate(start.Year, 1, 1), Period.FromYears(1), by);
-
-        public static IEnumerable<LocalDateTimeAndPeriod> EnumerateByMonthDay(LocalDate start, int[] by)
-            => EnumerateByYearOrMonthDay(new LocalDate(start.Year, start.Month, 1), Period.FromMonths(1), by);
-
-        private static IEnumerable<LocalDateTimeAndPeriod> EnumerateByYearOrMonthDay(LocalDate intervalStart, Period intervalPeriod, int[] by)
-        {
-            while (true)
-            {
-                var daysInInterval = Period.DaysBetween(intervalStart, intervalStart.Plus(intervalPeriod));
-                var byNormalized = by
-                    .Select(x => (x < 0) ? daysInInterval + 1 + x : x)
-                    .Where(x => (x >= 1) && (x <= daysInInterval))
-                    .OrderBy(x => x)
-                    .ToArray();
-
-                foreach (var c in byNormalized)
-                    yield return new(intervalStart.PlusDays(c - 1).AtMidnight(), Period.FromDays(1));
-
-                intervalStart = intervalStart.Plus(intervalPeriod);
-            }
-        }
-
-        public static IEnumerable<LocalDateTimeAndPeriod> OrderedIntersectDt(this IEnumerable<LocalDateTimeAndPeriod> items1, IEnumerable<LocalDateTimeAndPeriod> items2)
-        {
-            using var it1 = items1.GetEnumerator();
-            using var it2 = items2.GetEnumerator();
-
-            var iterators = new[] { it1, it2 }.ToList();
-
-            bool MoveAllNext()
-                => iterators.All(x => x.MoveNext());
-
-            MoveAllNext();
-
-            while (true)
-            {
-                var nextVal = iterators.Select(x => x.Current).IntersectDt();
-                if (nextVal != null)
-                    yield return nextVal;
-
-                if (!iterators.MinBy(x => x.Current.T + x.Current.Period)!.MoveNext())
-                    break;
             }
         }
     }

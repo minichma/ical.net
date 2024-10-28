@@ -19,9 +19,11 @@ namespace AltRecur.Test
             IncTimeDelegate byHour = (LocalDateTime t) => FindCurrentOrNextBy(t, PeriodUnits.Days, PeriodUnits.Hours, [12, 22]);
             IncTimeDelegate byYearDay = (LocalDateTime t) => FindCurrentOrNextBy(t, PeriodUnits.Years, PeriodUnits.Days, [-366], supportNegative: true);
             IncTimeDelegate byMonthDay = (LocalDateTime t) => FindCurrentOrNextBy(t, PeriodUnits.Months, PeriodUnits.Days, [1, -1], supportNegative: true);
+            IncTimeDelegate byDay = (LocalDateTime t) => FindCurrentOrNextByDay(t, PeriodUnits.Months, [(IsoDayOfWeek.Saturday, null), (IsoDayOfWeek.Tuesday, null), (IsoDayOfWeek.Wednesday, -1), (IsoDayOfWeek.Monday, 4)]);
 
             var enumeratble = Enumerate(dtStart, [
                 freq,
+                byDay,
                 bySec,
                 byMin,
                 byHour]);
