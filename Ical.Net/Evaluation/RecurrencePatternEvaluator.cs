@@ -948,7 +948,7 @@ namespace Ical.Net.Evaluation
                 CreateByComponent(referenceDate, this.Pattern.ByMonthDay, FrequencyType.Daily, PeriodUnits.Months, PeriodUnits.Days, supportNegative: true, fallback: (Pattern.Frequency != FrequencyType.Weekly) && (Pattern.ByDay.Count == 0) && (Pattern.ByWeekNo.Count == 0) && (Pattern.ByYearDay.Count == 0)),
                 CreateByComponent(referenceDate, this.Pattern.ByMonth, FrequencyType.Monthly, PeriodUnits.Years, PeriodUnits.Months, supportNegative: false, fallback: (Pattern.ByWeekNo.Count == 0) && (Pattern.ByYearDay.Count == 0)),
                 CreateByComponent(referenceDate, this.Pattern.ByYearDay, FrequencyType.None, PeriodUnits.Years, PeriodUnits.Days, supportNegative: true),
-                CreateByComponent(referenceDate, this.Pattern.ByWeekNo, FrequencyType.None, PeriodUnits.Years, PeriodUnits.Weeks, supportNegative: true),
+                CreateByWeekComponent(this.Pattern.ByWeekNo),
                 CreateByDayComponent(referenceDate, this.Pattern.ByDay),
 
             }.Where(x => x != null)
@@ -992,7 +992,7 @@ namespace Ical.Net.Evaluation
                         (x.DayOfWeek.ToNodaIsoDayOfWeek(),
                             (x.Offset == int.MinValue) ? (int?)null : x.Offset)).ToArray());
 
-            if (Pattern.Frequency == FrequencyType.Weekly)
+            if ((Pattern.Frequency == FrequencyType.Weekly) || (Pattern.ByWeekNo.Count != 0))
                 return t => RuleEnumerationUtils.FindCurrentOrNextByDay(t, outerUnit, [(refTime.ToNodaLocalDateTime().DayOfWeek, null)]);
 
             return null;
@@ -1008,6 +1008,14 @@ namespace Ical.Net.Evaluation
 
             if (fallback && (Pattern.Frequency > frequencyType))
                 return t => RuleEnumerationUtils.FindCurrentOrNextBy(t, outerUnit, innerUnit, [refTime.ToNodaLocalDateTime().GetLocalTimeComponent(innerUnit)]);
+
+            return null;
+        }
+
+        private Func<LocalDateTime, LocalDateTimeAndPeriod> CreateByWeekComponent(List<int> by)
+        {
+            if ((by?.Count ?? 0) != 0)
+                return t => RuleEnumerationUtils.FindCurrentOrNextByWeekNo(t, by.ToArray(), Pattern.FirstDayOfWeek.ToNodaIsoDayOfWeek());
 
             return null;
         }

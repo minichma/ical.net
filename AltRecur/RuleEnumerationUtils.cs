@@ -123,7 +123,7 @@ namespace AltRecur
         }
 
         private static LocalDateTimeAndPeriod FindCurrentOrNextByDayWithOrd(LocalDateTime t, PeriodUnits outerUnit, (IsoDayOfWeek dow, int ord)[] by)
-            => FindCurrentOrNextBy(t, outerUnit, PeriodUnits.Days, periodStart => GetByDaysWithOrd(periodStart, outerUnit, by));
+            => FindCurrentOrNextByInner(t, FloorTo(t, outerUnit), t => t.Plus(GetPeriod(outerUnit)), PeriodUnits.Days, 1, periodStart => GetByDaysWithOrd(periodStart, outerUnit, by));
 
         private static int[] GetByDaysWithOrd(LocalDateTime t, PeriodUnits outerUnit, (IsoDayOfWeek dow, int ord)[] by)
         {
@@ -148,14 +148,14 @@ namespace AltRecur
         }
 
         public static LocalDateTimeAndPeriod FindCurrentOrNextBy(LocalDateTime t, PeriodUnits outerUnit, PeriodUnits innerUnit, int[] by, bool supportNegative = false)
-            => FindCurrentOrNextBy(t, outerUnit, innerUnit, t => PrepareByArray(t, outerUnit, innerUnit, by, supportNegative));
+            => FindCurrentOrNextByInner(t, FloorTo(t, outerUnit), t => t.Plus(GetPeriod(outerUnit)), innerUnit, GetUnitFromLocalDateTime(FloorTo(t, outerUnit), innerUnit), t => PrepareByArray(t, outerUnit, innerUnit, by, supportNegative));
 
-        private static LocalDateTimeAndPeriod FindCurrentOrNextBy(LocalDateTime t, PeriodUnits outerUnit, PeriodUnits innerUnit, Func<LocalDateTime, int[]> getByByPeriod)
+        public static LocalDateTimeAndPeriod FindCurrentOrNextByWeekNo(LocalDateTime t, int[] by, IsoDayOfWeek startOfWeek)
+            => FindCurrentOrNextByInner(t, GetStartOfWeekOne(t, startOfWeek), t => t.PlusWeeks(GetWeeksInYear(t, startOfWeek)), PeriodUnits.Weeks, 1, t => PrepareByWeekNoArray(t, by, startOfWeek));
+
+        private static LocalDateTimeAndPeriod FindCurrentOrNextByInner(LocalDateTime t, LocalDateTime outerStart, Func<LocalDateTime, LocalDateTime> incOuter, PeriodUnits innerUnit, int unitMinValue, Func<LocalDateTime, int[]> getByByPeriod)
         {
             // Floor to period boundary (start of sec, min, hour)
-            var outerStart = FloorTo(t, outerUnit);
-            var offs = GetUnitFromLocalDateTime(outerStart, innerUnit);
-
             bool first = true;
             int next;
             do
@@ -163,19 +163,19 @@ namespace AltRecur
                 var preparedBy = getByByPeriod(outerStart);
 
                 next = first
-                    ? preparedBy.Where(x => x >= GetPeriodUnits(Period.Between(outerStart, t, innerUnit), innerUnit) + offs).FirstOrDefault(-1)
+                    ? preparedBy.Where(x => x >= GetPeriodUnits(Period.Between(outerStart, t, innerUnit), innerUnit) + unitMinValue).FirstOrDefault(-1)
                     : preparedBy.FirstOrDefault(-1);
 
                 if (next < 0)
                 {
-                    outerStart = outerStart.Plus(GetPeriod(outerUnit));
+                    outerStart = incOuter(outerStart);
                     preparedBy = getByByPeriod(outerStart);
                 }
 
                 first = false;
             } while (next < 0);
 
-            outerStart = outerStart.Plus(GetPeriod(innerUnit, next - offs));
+            outerStart = outerStart.Plus(GetPeriod(innerUnit, next - unitMinValue));
 
             return new(outerStart, GetPeriod(innerUnit));
         }
@@ -185,13 +185,25 @@ namespace AltRecur
             var outerFlooredT = FloorTo(t, outerUnit);
             var totalIncs = GetPeriodUnits(Period.Between(outerFlooredT, outerFlooredT.Plus(GetPeriod(outerUnit)), innerUnit), innerUnit);
             var v0 = GetUnitFromLocalDateTime(t, innerUnit);
+            return PrepareByArray(by, supportNegative, totalIncs, v0);
+        }
+
+        private static int[] PrepareByArray(int[] by, bool supportNegative, int totalIncs, int current)
+        {
             IEnumerable<int> newBy = by;
             if (supportNegative)
                 newBy = newBy.Select(x => (x >= 0) ? x : (totalIncs + 1 + x));
 
-            newBy = newBy.Where(x => (x >= v0) && (x < (totalIncs + v0)));
+            newBy = newBy.Where(x => (x >= current) && (x <= totalIncs));
             var res = newBy.OrderBy(x => x).ToArray();
             return res;
+        }
+
+        private static int[] PrepareByWeekNoArray(LocalDateTime t, int[] by, IsoDayOfWeek startOfWeek)
+        {
+            var totalIncs = GetWeeksInYear(t, startOfWeek);
+            var v0 = GetWeekNo(t, startOfWeek);
+            return PrepareByArray(by, true, totalIncs, v0);
         }
 
         public delegate LocalDateTimeAndPeriod IncTimeDelegate(LocalDateTime t);
@@ -277,9 +289,46 @@ namespace AltRecur
             }
         }
 
-        public static int GetWeekNo(LocalDateTime t, IsoDayOfWeek isoDayOfWeek)
+        private static LocalDateTime GetStartOfWeekOne(LocalDateTime t, IsoDayOfWeek isoDayOfWeek)
         {
-            return new GregorianCalendar().GetWeekOfYear(t.ToDateTimeUnspecified(), CalendarWeekRule.FirstFourDayWeek, (DayOfWeek)((int)isoDayOfWeek % 7));
+            var weekNo = GetWeekNo(t, isoDayOfWeek);
+            t = FloorTo(t, PeriodUnits.Days);
+            t = t.PlusWeeks(-weekNo + 1);
+            if (t.DayOfWeek != isoDayOfWeek)
+                t = t.Previous(isoDayOfWeek);
+
+            return t;
+        }
+
+        private static int GetWeekNo(LocalDateTime t, IsoDayOfWeek startOfWeek)
+        {
+            // We add 3 to make sure the test date is in the 'right' year, because
+            // otherwise we might end up with week 53 in a year that only has 52.
+            var tTest = GetStartOfWeek(t, startOfWeek).PlusDays(3);
+            var cal = new GregorianCalendar();
+            var res = cal.GetWeekOfYear(tTest.ToDateTimeUnspecified(), CalendarWeekRule.FirstFourDayWeek, ToNetDayOfWeek(startOfWeek));
+
+            return res;
+        }
+
+        private static LocalDateTime GetStartOfWeek(LocalDateTime t, IsoDayOfWeek startOfWeek)
+        {
+            var t0 = ((int)startOfWeek) % 7;
+            var t1 = ((int)t.DayOfWeek) % 7;
+            return t.PlusDays(-((t1 + 7 - t0) % 7));
+        }
+
+        private static DayOfWeek ToNetDayOfWeek(IsoDayOfWeek dow)
+        {
+            return (DayOfWeek)((int)dow % 7);
+        }
+
+        private static int GetWeeksInYear(LocalDateTime t, IsoDayOfWeek isoDayOfWeek)
+        {
+            var t0 = GetStartOfWeekOne(t, isoDayOfWeek);
+            var t1 = GetStartOfWeekOne(t.PlusYears(1).PlusWeeks(1), isoDayOfWeek);
+
+            return Period.DaysBetween(t0.Date, t1.Date) / 7;
         }
     }
 }
