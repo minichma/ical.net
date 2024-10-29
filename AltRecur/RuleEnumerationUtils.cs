@@ -4,7 +4,7 @@ namespace AltRecur
 {
     public static class RuleEnumerationUtils
     {
-        private static LocalDateTime FloorTo(LocalDateTime t, PeriodUnits PeriodUnits)
+        public static LocalDateTime FloorTo(LocalDateTime t, PeriodUnits PeriodUnits)
         {
             var b = new PeriodBuilder();
             switch (PeriodUnits)
@@ -79,8 +79,8 @@ namespace AltRecur
             var incUnits = dUnits - ((dUnits % interval) + interval) % interval + interval;
             var inc = GetPeriod(unit, incUnits);
 
-            var res = dtStart.Plus(inc);
-            return new(res, GetPeriod(unit, 1));
+            var res = FloorTo(dtStart.Plus(inc), unit);
+            return new(res, GetPeriod(unit));
         }
 
         private static LocalDateTimeAndPeriod FindCurrentOrNextByWeekDay(LocalDateTime t, IsoDayOfWeek[] by)
@@ -140,6 +140,7 @@ namespace AltRecur
         {
             // Floor to period boundary (start of sec, min, hour)
             var outerStart = FloorTo(t, outerUnit);
+            var offs = GetUnitFromLocalDateTime(outerStart, innerUnit);
 
             bool first = true;
             int next;
@@ -148,7 +149,7 @@ namespace AltRecur
                 var preparedBy = getByByPeriod(outerStart);
 
                 next = first
-                    ? preparedBy.Where(x => x >= GetUnitFromLocalDateTime(t, innerUnit)).FirstOrDefault(-1)
+                    ? preparedBy.Where(x => x >= GetPeriodUnits(Period.Between(outerStart, t, innerUnit), innerUnit) + offs).FirstOrDefault(-1)
                     : preparedBy.FirstOrDefault(-1);
 
                 if (next < 0)
@@ -160,7 +161,7 @@ namespace AltRecur
                 first = false;
             } while (next < 0);
 
-            outerStart = outerStart.Plus(GetPeriod(innerUnit, next - GetUnitFromLocalDateTime(outerStart, innerUnit)));
+            outerStart = outerStart.Plus(GetPeriod(innerUnit, next - offs));
 
             return new(outerStart, GetPeriod(innerUnit));
         }
@@ -184,7 +185,61 @@ namespace AltRecur
             public LocalDateTimeAndPeriod Value { get; set; } = value;
         }
 
-        public static IEnumerable<LocalDateTime> Enumerate(LocalDateTime start, LocalDateTime? end, IncTimeDelegate[] components)
+        public static Func<(LocalDateTime start, LocalDateTime? end), IEnumerable<LocalDateTime>> EnumerateWithCount(LocalDateTime dtStart, Func<(LocalDateTime start, LocalDateTime? end), IEnumerable<LocalDateTime>> inner, int count)
+            => arg => inner((dtStart, arg.end))
+                .Take(count)
+                .Where(x => x >= arg.start);
+
+        public static Func<(LocalDateTime start, LocalDateTime? end), IEnumerable<LocalDateTime>> EnumerateWithUntil(LocalDateTime dtStart, Func<(LocalDateTime start, LocalDateTime? end), IEnumerable<LocalDateTime>> inner, LocalDateTime? until)
+        {
+            return arg =>
+            {
+                var start = (dtStart > arg.start) ? dtStart : arg.start;
+                var end = arg.end ?? until;
+                if ((arg.end != null) && (until != null) && (arg.end > until))
+                    end = until.Value.PlusTicks(1);
+                else
+                    end = arg.end ?? until;
+
+                return inner((start, end));
+            };
+        }
+
+        public static Func<(LocalDateTime start, LocalDateTime? end), IEnumerable<LocalDateTime>> EnumerateWithSetPos(PeriodUnits freq, Func<(LocalDateTime start, LocalDateTime? end), IEnumerable<LocalDateTime>> inner, int[] setPos)
+            => arg => EnumerateWithSetPos(arg.start, arg.end, freq, inner, setPos);
+
+        public static IEnumerable<LocalDateTime> EnumerateWithSetPos(LocalDateTime start, LocalDateTime? end, PeriodUnits freq, Func<(LocalDateTime start, LocalDateTime? end), IEnumerable<LocalDateTime>> inner, int[] setPos)
+        {
+            LocalDateTime? setPeriodStart = null;
+            HashSet<int> by = [];
+            int currentSetPos = 0;
+
+            foreach (var item in inner((FloorTo(start, freq), end)))
+            {
+                var itemPeriodStart = FloorTo(item, freq);
+                if (setPeriodStart != itemPeriodStart)
+                {
+                    var nofEntries = inner((itemPeriodStart, itemPeriodStart.Plus(GetPeriod(freq)))).Count();
+                    by = setPos.Select(x => (x < 0) ? (nofEntries + 1 + x) : x)
+                        .Where(x => x > 0)
+                        .Where(x => x <= nofEntries)
+                        .ToHashSet();
+
+                    currentSetPos = 1;
+                    setPeriodStart = itemPeriodStart;
+                }
+
+                if (by.Contains(currentSetPos) && (item >= start))
+                    yield return item;
+
+                currentSetPos++;
+            }
+        }
+
+        public static Func<(LocalDateTime start, LocalDateTime? end), IEnumerable<LocalDateTime>> Enumerate(Func<LocalDateTime, LocalDateTimeAndPeriod>[] components)
+            => arg => Enumerate(arg.start, arg.end, components);
+
+        public static IEnumerable<LocalDateTime> Enumerate(LocalDateTime start, LocalDateTime? end, Func<LocalDateTime, LocalDateTimeAndPeriod>[] components)
         {
             var state = components.Select(x => (del: x, t: new LocalDateTimeAndPeriodHolder(x(start.PlusTicks(-1))))).ToArray();
             while (true)
@@ -202,10 +257,12 @@ namespace AltRecur
                 }
                 else
                 {
-                    var maxStart = state.MaxBy(x => x.t.Value.T).t.Value.T;
+                    var minEnd = state.Select(x => x.t.Value.T + x.t.Value.Period).Min();
+                    var maxStart = state.Select(x => x.t.Value.T).Max();
+                    var threshold = (minEnd > maxStart) ? minEnd : maxStart;
 
-                    foreach (var item in state.Where(x => (x.t.Value.T + x.t.Value.Period) <= maxStart))
-                        item.t.Value = item.del(maxStart);
+                    foreach (var item in state.Where(x => (x.t.Value.T + x.t.Value.Period) <= threshold))
+                        item.t.Value = item.del(threshold);
                 }
             }
         }

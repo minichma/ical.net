@@ -1,9 +1,13 @@
-﻿using Ical.Net.DataTypes;
+﻿using AltRecur;
+using Ical.Net.DataTypes;
 using Ical.Net.Utility;
+using NodaTime;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+
+using static AltRecur.RuleEnumerationUtils;
 
 namespace Ical.Net.Evaluation
 {
@@ -900,7 +904,7 @@ namespace Ical.Net.Evaluation
             return dates;
         }
 
-        private Period CreatePeriod(DateTime dt, IDateTime referenceDate)
+        private DataTypes.Period CreatePeriod(DateTime dt, IDateTime referenceDate)
         {
             // Turn each resulting date/time into an IDateTime and associate it
             // with the reference date.
@@ -912,7 +916,7 @@ namespace Ical.Net.Evaluation
             newDt.AssociateWith(referenceDate);
 
             // Create a period from the new date/time.
-            return new Period(newDt);
+            return new DataTypes.Period(newDt);
         }
 
         /// <summary>
@@ -923,7 +927,7 @@ namespace Ical.Net.Evaluation
         /// <param name="periodEnd">End (excl.) of the period occurrences are generated for.</param>
         /// <param name="includeReferenceDateInResults">Whether the referenceDate itself should be returned. Ignored as the reference data MUST equal the first occurrence of an RRULE.</param>
         /// <returns></returns>
-        public override HashSet<Period> Evaluate(IDateTime referenceDate, DateTime periodStart, DateTime periodEnd, bool includeReferenceDateInResults)
+        public override HashSet<DataTypes.Period> Evaluate(IDateTime referenceDate, DateTime periodStart, DateTime periodEnd, bool includeReferenceDateInResults)
         {
             if ((this.Pattern.Frequency != FrequencyType.None) && (this.Pattern.Frequency < FrequencyType.Daily) && !referenceDate.HasTime)
             {
@@ -934,19 +938,62 @@ namespace Ical.Net.Evaluation
                 referenceDate.HasTime = true;
             }
 
-            // Create a recurrence pattern suitable for use during evaluation.
-            var pattern = ProcessRecurrencePattern(referenceDate);
+            var components = new Func<LocalDateTime, LocalDateTimeAndPeriod>[]
+            {
+                t => NextInterval(referenceDate.ToNodaLocalDateTime(), t, Pattern.Frequency.ToNodaPeriodUnits(), Pattern.Interval),
+                CreateByComponent(referenceDate, this.Pattern.BySecond, PeriodUnits.Minutes, PeriodUnits.Seconds, fallback: true),
+                CreateByComponent(referenceDate, this.Pattern.ByMinute, PeriodUnits.Hours, PeriodUnits.Minutes, fallback: true),
+                CreateByComponent(referenceDate, this.Pattern.ByHour, PeriodUnits.Days, PeriodUnits.Hours, fallback: true),
+                CreateByComponent(referenceDate, this.Pattern.ByMonthDay, PeriodUnits.Months, PeriodUnits.Days, supportNegative: true, fallback: false),
+                CreateByComponent(referenceDate, this.Pattern.ByMonth, PeriodUnits.Years, PeriodUnits.Months, supportNegative: false, fallback: false),
+                CreateByComponent(referenceDate, this.Pattern.ByYearDay, PeriodUnits.Years, PeriodUnits.Days, supportNegative: true),
+                CreateByComponent(referenceDate, this.Pattern.ByWeekNo, PeriodUnits.Years, PeriodUnits.Weeks, supportNegative: true),
+                CreateByDayComponent(),
 
-            // Enforce evaluation restrictions on the pattern.
-            EnforceEvaluationRestrictions(pattern);
-            Periods.Clear();
+            }.Where(x => x != null)
+            .ToArray();
 
-            var periodQuery = GetDates(referenceDate, periodStart, periodEnd, -1, pattern, includeReferenceDateInResults)
-                .Select(dt => CreatePeriod(dt, referenceDate));
 
-            Periods.UnionWith(periodQuery);
+            var enumFactory = RuleEnumerationUtils.Enumerate(components);
+            if (this.Pattern.BySetPosition.Count != 0)
+                enumFactory = RuleEnumerationUtils.EnumerateWithSetPos(Pattern.Frequency.ToNodaPeriodUnits(), enumFactory, this.Pattern.BySetPosition.ToArray());
 
-            return Periods;
+            if (this.Pattern.Count != int.MinValue)
+                enumFactory = RuleEnumerationUtils.EnumerateWithCount(referenceDate.ToNodaLocalDateTime(), enumFactory, Pattern.Count);
+            else
+                enumFactory = RuleEnumerationUtils.EnumerateWithUntil(referenceDate.ToNodaLocalDateTime(), enumFactory, null);
+
+            var res = enumFactory((LocalDateTime.FromDateTime(periodStart), LocalDateTime.FromDateTime(periodEnd)))
+                .Select(x => new DataTypes.Period(x.ToCalDateTime(referenceDate.TzId)))
+                .ToHashSet();
+
+            return res;
         }
+
+        private Func<LocalDateTime, LocalDateTimeAndPeriod> CreateByDayComponent()
+        {
+            if (this.Pattern.ByDay.Count == 0)
+                return null;
+
+            var ordPeriod = this.Pattern.Frequency switch
+            {
+                FrequencyType.Monthly => NodaTime.PeriodUnits.Months,
+                FrequencyType.Yearly when this.Pattern.ByMonth.Count != 0 => NodaTime.PeriodUnits.Months,
+                FrequencyType.Yearly => NodaTime.PeriodUnits.Years,
+                _ => NodaTime.PeriodUnits.None
+            };
+
+            var by = this.Pattern.ByDay
+                .Select(x => (x.DayOfWeek.ToNodaIsoDayOfWeek(), (x.Offset == int.MinValue) ? (int?)null : x.Offset))
+                .ToArray();
+
+            return t => RuleEnumerationUtils.FindCurrentOrNextByDay(t, ordPeriod, by);
+        }
+
+        private Func<LocalDateTime, LocalDateTimeAndPeriod> CreateByComponent(IDateTime refTime, List<int> by, PeriodUnits outerUnit, PeriodUnits innerUnit, bool supportNegative = false, bool fallback = false)
+            =>
+            ((by?.Count ?? 0) != 0) ? t => RuleEnumerationUtils.FindCurrentOrNextBy(t, outerUnit, innerUnit, by.ToArray(), supportNegative)
+            : fallback ? t => RuleEnumerationUtils.FindCurrentOrNextBy(t, outerUnit, innerUnit, [refTime.ToNodaLocalDateTime().GetLocalTimeComponent(innerUnit)])
+            : null;
     }
 }
