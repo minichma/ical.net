@@ -24,7 +24,7 @@ namespace AltRecur.Test
             //var enumerable = Enumerate(dtStart.PlusWeeks(0), dtStart.PlusYears(1), [
             //    freq]);
 
-            var f1 = (LocalDateTime t) => NextInterval(dtStart, t, PeriodUnits.Days, 1);
+            var f1 = (LocalDateTime t) => FindCurrentOrNextInterval(dtStart, t, PeriodUnits.Days, 1, null);
             var f2 = (LocalDateTime t) => FindCurrentOrNextByDay(t, PeriodUnits.Months, [
                 (IsoDayOfWeek.Monday, null),
                 (IsoDayOfWeek.Tuesday, null),

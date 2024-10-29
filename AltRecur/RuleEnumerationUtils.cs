@@ -26,6 +26,10 @@ namespace AltRecur
                     goto case PeriodUnits.Years;
                 case PeriodUnits.Years:
                     break;
+                case PeriodUnits.Weeks:
+                    var tmp = FloorTo(t, PeriodUnits.Days);
+                    var dow = tmp.DayOfWeek;
+                    return tmp.PlusDays(-((int)dow - 1));
                 default:
                     throw new ApplicationException();
             }
@@ -42,11 +46,12 @@ namespace AltRecur
                 PeriodUnits.Days => Period.FromDays(n),
                 PeriodUnits.Months => Period.FromMonths(n),
                 PeriodUnits.Years => Period.FromYears(n),
+                PeriodUnits.Weeks => Period.FromWeeks(n),
                 _ => throw new ApplicationException()
             };
 
-        private static int GetUnitFromLocalDateTime(LocalDateTime t, PeriodUnits PeriodUnits)
-            => PeriodUnits switch
+        private static int GetUnitFromLocalDateTime(LocalDateTime t, PeriodUnits units)
+            => units switch
             {
                 PeriodUnits.Seconds => t.Second,
                 PeriodUnits.Minutes => t.Minute,
@@ -64,22 +69,28 @@ namespace AltRecur
                 PeriodUnits.Minutes => (int)t.Minutes,
                 PeriodUnits.Hours => (int)t.Hours,
                 PeriodUnits.Days => t.Days,
+                PeriodUnits.Weeks => t.Weeks,
                 PeriodUnits.Months => t.Months,
                 PeriodUnits.Years => t.Years,
                 _ => throw new ApplicationException()
             };
 
-        public static LocalDateTimeAndPeriod NextInterval(LocalDateTime dtStart, LocalDateTime t, PeriodUnits unit, int interval)
+        public static LocalDateTimeAndPeriod FindCurrentOrNextInterval(LocalDateTime dtStart, LocalDateTime t, PeriodUnits unit, int interval, Period? offset)
         {
-            var dt = Period.Between(dtStart, t, unit);
-            if (t < (dtStart + dt))
-                dt = dt - GetPeriod(unit);
+            var dtStartFloored = FloorTo(dtStart, unit);
+            if (offset != null)
+            {
+                dtStartFloored = dtStartFloored.Plus(offset);
+                if (dtStartFloored > dtStart)
+                    dtStartFloored = dtStartFloored.Plus(-GetPeriod(unit));
+            }
 
+            var dt = Period.Between(dtStartFloored, t, unit);
             var dUnits = GetPeriodUnits(dt, unit);
-            var incUnits = dUnits - ((dUnits % interval) + interval) % interval + interval;
-            var inc = GetPeriod(unit, incUnits);
+            var incUnits = unchecked((int)((((uint)dUnits) + interval - 1) / (uint)interval * interval));
 
-            var res = FloorTo(dtStart.Plus(inc), unit);
+            var inc = GetPeriod(unit, incUnits);
+            var res = dtStartFloored.Plus(inc);
             return new(res, GetPeriod(unit));
         }
 
@@ -171,11 +182,13 @@ namespace AltRecur
             var totalIncs = GetPeriodUnits(Period.Between(t, t.Plus(GetPeriod(outerUnit)), innerUnit), innerUnit);
             var v0 = GetUnitFromLocalDateTime(t, innerUnit);
 
+            IEnumerable<int> newBy = by;
             if (supportNegative)
-                by = by.Select(x => (x >= 0) ? x : (totalIncs + 1 + x)).OrderBy(x => x).ToArray();
+                newBy = newBy.Select(x => (x >= 0) ? x : (totalIncs + 1 + x));
 
-            by = by.Where(x => (x >= v0) && (x < (totalIncs + v0))).ToArray();
-            return by;
+            newBy = newBy.Where(x => (x >= v0) && (x < (totalIncs + v0)));
+            var res = newBy.OrderBy(x => x).ToArray();
+            return res;
         }
 
         public delegate LocalDateTimeAndPeriod IncTimeDelegate(LocalDateTime t);
@@ -250,20 +263,14 @@ namespace AltRecur
                 var comb = state.Select(x => x.t.Value).IntersectDt();
 
                 if (comb != null)
-                {
                     yield return comb.T;
-                    var minEnd = state.MinBy(x => x.t.Value.T + x.t.Value.Period);
-                    minEnd.t.Value = minEnd.del(minEnd.t.Value.T + minEnd.t.Value.Period);
-                }
-                else
-                {
-                    var minEnd = state.Select(x => x.t.Value.T + x.t.Value.Period).Min();
-                    var maxStart = state.Select(x => x.t.Value.T).Max();
-                    var threshold = (minEnd > maxStart) ? minEnd : maxStart;
 
-                    foreach (var item in state.Where(x => (x.t.Value.T + x.t.Value.Period) <= threshold))
-                        item.t.Value = item.del(threshold);
-                }
+                var minEnd = state.Select(x => x.t.Value.T + x.t.Value.Period).Min();
+                var maxStart = state.Select(x => x.t.Value.T).Max();
+                var threshold = (minEnd > maxStart) ? minEnd : maxStart;
+
+                foreach (var item in state.Where(x => (x.t.Value.T + x.t.Value.Period) <= threshold))
+                    item.t.Value = item.del(threshold);
             }
         }
     }
