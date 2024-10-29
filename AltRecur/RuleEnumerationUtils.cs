@@ -1,4 +1,7 @@
 ﻿using NodaTime;
+using NodaTime.Text;
+using System.Globalization;
+using static System.Runtime.InteropServices.JavaScript.JSType;
 
 namespace AltRecur
 {
@@ -179,9 +182,9 @@ namespace AltRecur
 
         private static int[] PrepareByArray(LocalDateTime t, PeriodUnits outerUnit, PeriodUnits innerUnit, int[] by, bool supportNegative)
         {
-            var totalIncs = GetPeriodUnits(Period.Between(t, t.Plus(GetPeriod(outerUnit)), innerUnit), innerUnit);
+            var outerFlooredT = FloorTo(t, outerUnit);
+            var totalIncs = GetPeriodUnits(Period.Between(outerFlooredT, outerFlooredT.Plus(GetPeriod(outerUnit)), innerUnit), innerUnit);
             var v0 = GetUnitFromLocalDateTime(t, innerUnit);
-
             IEnumerable<int> newBy = by;
             if (supportNegative)
                 newBy = newBy.Select(x => (x >= 0) ? x : (totalIncs + 1 + x));
@@ -272,6 +275,11 @@ namespace AltRecur
                 foreach (var item in state.Where(x => (x.t.Value.T + x.t.Value.Period) <= threshold))
                     item.t.Value = item.del(threshold);
             }
+        }
+
+        public static int GetWeekNo(LocalDateTime t, IsoDayOfWeek isoDayOfWeek)
+        {
+            return new GregorianCalendar().GetWeekOfYear(t.ToDateTimeUnspecified(), CalendarWeekRule.FirstFourDayWeek, (DayOfWeek)((int)isoDayOfWeek % 7));
         }
     }
 }
