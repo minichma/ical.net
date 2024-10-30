@@ -3679,6 +3679,8 @@ END:VCALENDAR
 
         public class LibicalTestCase
         {
+            public int LineNo { get; set; }
+
             public string RRule { get; set; }
 
             public CalDateTime DtStart { get; set; }
@@ -3688,7 +3690,7 @@ END:VCALENDAR
             public IReadOnlyList<CalDateTime> Instances { get; set; }
 
             public override string ToString()
-                => $"{DtStart}, {RRule}";
+                => $"{LineNo}: {DtStart}{((StartAt == null) ? "" : StartAt.ToString())}, {RRule}";
         }
 
         private static IEnumerable<LibicalTestCase> ParseLibicalIcalrecurTestCases(string fileContent)
@@ -3696,8 +3698,11 @@ END:VCALENDAR
             LibicalTestCase current = null;
 
             var rd = new StringReader(fileContent);
+            int lineNo = 0;
             for (string line = rd.ReadLine(); line != null; line = rd.ReadLine())
             {
+                lineNo++;
+
                 if (string.IsNullOrEmpty(line))
                 {
                     if (current != null)
@@ -3708,7 +3713,13 @@ END:VCALENDAR
                     continue;
                 }
 
-                current = current ?? new LibicalTestCase();
+                if (line.StartsWith("#"))
+                    continue;
+
+                current = current ?? new LibicalTestCase()
+                {
+                    LineNo = lineNo,
+                };
 
                 var m = Regex.Match(line, @"^(?<h>[A-Z-]+):(?<v>.*)$");
                 if (!m.Success)
@@ -3762,13 +3773,16 @@ END:VCALENDAR
                 RestrictionType = RecurrenceRestrictionType.NoRestriction,
             });
 
-            var occurrences = evt.GetOccurrences(testCase.StartAt?.Value ?? DateTime.MinValue, DateTime.MaxValue)
-                .OrderBy(x => x)
-                .ToList();
+            for (int i = 0; i < 100; i++)
+            {
+                var occurrences = evt.GetOccurrences(testCase.StartAt?.Value ?? DateTime.MinValue, DateTime.MaxValue)
+                    .OrderBy(x => x)
+                    .ToList();
 
-            var startDates = occurrences.Select(x => x.Period.StartTime).ToList();
+                var startDates = occurrences.Select(x => x.Period.StartTime).ToList();
 
-            Assert.That(startDates, Is.EqualTo(testCase.Instances));
+                Assert.That(startDates, Is.EqualTo(testCase.Instances));
+            }
         }
     }
 }
