@@ -118,7 +118,7 @@ namespace AltRecur
 
             LocalDateTimeAndPeriod[] candidates = [.. t1, .. t2];
 
-            var res = candidates.MinBy(x => x.T);
+            var res = candidates.MinBy(x => x.Start);
             return res!;
         }
 
@@ -244,6 +244,7 @@ namespace AltRecur
 
             foreach (var item in inner((FloorTo(start, freq), end)))
             {
+                // FloorTo won't work with weeks
                 var itemPeriodStart = FloorTo(item, freq);
                 if (setPeriodStart != itemPeriodStart)
                 {
@@ -269,23 +270,38 @@ namespace AltRecur
 
         public static IEnumerable<LocalDateTime> Enumerate(LocalDateTime start, LocalDateTime? end, Func<LocalDateTime, LocalDateTimeAndPeriod>[] components)
         {
-            var state = components.Select(x => (del: x, t: new LocalDateTimeAndPeriodHolder(x(start.PlusTicks(-1))))).ToArray();
+            var state = components.Select(x => (inc: x, t: new LocalDateTimeAndPeriodHolder(x(start.PlusTicks(-1))))).ToArray();
             while (true)
             {
-                if ((end != null) && (state.First().t.Value.T >= end))
+                if ((end != null) && (state.First().t.Value.Start >= end))
                     break;
 
                 var comb = state.Select(x => x.t.Value).IntersectDt();
 
                 if (comb != null)
-                    yield return comb.T;
+                    yield return comb.Start;
 
-                var minEnd = state.Select(x => x.t.Value.T + x.t.Value.Period).Min();
-                var maxStart = state.Select(x => x.t.Value.T).Max();
+                var minEnd = state.Select(x => x.t.Value.Start + x.t.Value.Period).Min();
+                var maxStart = state.Select(x => x.t.Value.Start).Max();
                 var threshold = (minEnd > maxStart) ? minEnd : maxStart;
 
-                foreach (var item in state.Where(x => (x.t.Value.T + x.t.Value.Period) <= threshold))
-                    item.t.Value = item.del(threshold);
+                bool proceeded;
+                do
+                {
+                    proceeded = false;
+                    foreach (var item in state)
+                    {
+                        if ((item.t.Value.Start + item.t.Value.Period) <= threshold)
+                        {
+                            item.t.Value = item.inc(threshold);
+                            if (threshold < item.t.Value.Start)
+                            {
+                                threshold = item.t.Value.Start;
+                                proceeded = true;
+                            }
+                        }
+                    }
+                } while (proceeded);
             }
         }
 

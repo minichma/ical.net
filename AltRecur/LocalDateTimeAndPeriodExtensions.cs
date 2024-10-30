@@ -4,8 +4,8 @@
     {
         public static LocalDateTimeAndPeriod? IntersectDt(this IEnumerable<LocalDateTimeAndPeriod> ts)
         {
-            var t = ts.Max(x => x.T);
-            var end = ts.Min(x => x.T.Plus(x.Period));
+            var t = ts.Max(x => x.Start);
+            var end = ts.Min(x => x.Start.Plus(x.Period));
 
             if (end <= t)
                 return null;

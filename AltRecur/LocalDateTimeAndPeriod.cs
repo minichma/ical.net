@@ -2,6 +2,6 @@
 
 namespace AltRecur
 {
-    public record LocalDateTimeAndPeriod(LocalDateTime T, Period Period)
+    public record LocalDateTimeAndPeriod(LocalDateTime Start, Period Period)
     { }
 }
