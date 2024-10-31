@@ -25,8 +25,8 @@ namespace Ical.Net.Utility
         public static IsoDayOfWeek ToNodaIsoDayOfWeek(this DayOfWeek dow)
             => (dow == DayOfWeek.Sunday) ? IsoDayOfWeek.Sunday : (IsoDayOfWeek)dow;
 
-        public static CalDateTime ToCalDateTime(this LocalDateTime t, string tzId = null)
-            => new CalDateTime(t.ToDateTimeUnspecified(), tzId) { HasTime = true };
+        public static CalDateTime ToCalDateTime(this LocalDateTime t, string tzId = null, bool hasTime = true)
+            => new CalDateTime(t.ToDateTimeUnspecified(), tzId) { HasTime = hasTime };
 
         public static int GetLocalTimeComponent(this LocalDateTime t, PeriodUnits unit)
             => unit switch
