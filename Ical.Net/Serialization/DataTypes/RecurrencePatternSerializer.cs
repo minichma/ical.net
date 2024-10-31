@@ -239,6 +239,9 @@ namespace Ical.Net.Serialization.DataTypes
                     var keywordPairs = match.Groups[2].Value.Split(';');
                     foreach (var keywordPair in keywordPairs)
                     {
+                        if (keywordPair == "")
+                            continue;
+
                         var keyValues = keywordPair.Split('=');
                         var keyword = keyValues[0];
                         var keyValue = keyValues[1];
