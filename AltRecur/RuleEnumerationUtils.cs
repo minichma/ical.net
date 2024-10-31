@@ -1,5 +1,8 @@
 ﻿using NodaTime;
 using NodaTime.Text;
+using System;
+using System.ComponentModel.DataAnnotations;
+using System.Data.SqlTypes;
 using System.Globalization;
 using static System.Runtime.InteropServices.JavaScript.JSType;
 
@@ -270,12 +273,9 @@ namespace AltRecur
 
         public static IEnumerable<LocalDateTime> Enumerate(LocalDateTime start, LocalDateTime? end, Func<LocalDateTime, LocalDateTimeAndPeriod>[] components)
         {
-            var state = components.Select(x => (inc: x, t: new LocalDateTimeAndPeriodHolder(x(start.PlusTicks(-1))))).ToArray();
-            while (true)
+            var state = components.Select(x => (inc: x, t: new LocalDateTimeAndPeriodHolder(x(start)))).ToArray();
+            while ((end == null) || !state.Any(s => s.t.Value.Start > end))
             {
-                if ((end != null) && (state.First().t.Value.Start >= end))
-                    break;
-
                 var comb = state.Select(x => x.t.Value).IntersectDt();
 
                 if (comb != null)
@@ -346,5 +346,93 @@ namespace AltRecur
 
             return Period.DaysBetween(t0.Date, t1.Date) / 7;
         }
+
+        public static PeriodUnits ToNodaPeriodUnits(this RuleFrequency freq)
+            => freq switch
+            {
+                RuleFrequency.Secondly => PeriodUnits.Seconds,
+                RuleFrequency.Minutely => PeriodUnits.Minutes,
+                RuleFrequency.Hourly => PeriodUnits.Hours,
+                RuleFrequency.Daily => PeriodUnits.Days,
+                RuleFrequency.Weekly => PeriodUnits.Weeks,
+                RuleFrequency.Monthly => PeriodUnits.Months,
+                RuleFrequency.Yearly => PeriodUnits.Years,
+                _ => throw new NotSupportedException()
+            };
+
+        public static Func<(LocalDateTime start, LocalDateTime? end), IEnumerable<LocalDateTime>> BuildEnumerationFactory(RecurrenceRule rule)
+        {
+            if (!rule.IsValid())
+                throw new FormatException();
+
+            // The offset of the start of week relative to Monday (Tuesday = +1, ...)
+            var weekDayOffset = NodaTime.Period.FromDays((int)(rule.WeekStart ?? IsoDayOfWeek.Monday) - (int)IsoDayOfWeek.Monday);
+
+            IEnumerable<Func<LocalDateTime, LocalDateTimeAndPeriod>> components = [
+                t => FindCurrentOrNextInterval(rule.DtStart, t, rule.Frequency.ToNodaPeriodUnits(), rule.Interval, (rule.Frequency == RuleFrequency.Weekly) ? weekDayOffset : null)];
+
+            PeriodUnits GetByDayOuterUnit()
+                => rule.Frequency switch
+                {
+                    RuleFrequency.Monthly => PeriodUnits.Months,
+                    RuleFrequency.Yearly when (rule.ByMonth != null) => PeriodUnits.Months,
+                    RuleFrequency.Yearly => PeriodUnits.Years,
+                    _ => PeriodUnits.None
+                };
+
+            Func<LocalDateTime, LocalDateTimeAndPeriod> BuildByComponent(ByPart byPart, IReadOnlySet<int> byValues)
+            {
+                var dsr = RecurrenceExpandRules.ByPartDescriptors[byPart];
+
+                return byPart switch
+                {
+                    ByPart.ByWeekNo => t => RuleEnumerationUtils.FindCurrentOrNextByWeekNo(t, byValues.ToArray(), rule.WeekStart ?? IsoDayOfWeek.Monday),
+                    ByPart.ByDay => t => RuleEnumerationUtils.FindCurrentOrNextByDay(t, GetByDayOuterUnit(), rule.ByDay!.ToArray()),
+                    _ => t => RuleEnumerationUtils.FindCurrentOrNextBy(t, dsr.OuterUnit, dsr.InnerUnit, byValues.ToArray(), dsr.SupportNegative)
+                };
+            }
+
+            var byRules = rule.GetByRules();
+            components = components.Concat(byRules
+                .Where(byRule => byRule.Key != ByPart.BySetPos)
+                // time-related BY parts MUST be ignored, if DTSTART is of type DATE (i.e. date-only)
+                .Where(byRule => rule.hasTime || !RecurrenceExpandRules.ByPartDescriptors[byRule.Key].IsTime)
+                .Select(byRule => BuildByComponent(byRule.Key, byRule.Value)));
+
+            Func<LocalDateTime, LocalDateTimeAndPeriod> BuildFallbackExpandByComponent(ByPart byPart)
+            {
+                var dsr = RecurrenceExpandRules.ByPartDescriptors[byPart];
+                switch (byPart)
+                {
+                    case ByPart.ByDay:
+                        return t => RuleEnumerationUtils.FindCurrentOrNextByDay(t, PeriodUnits.None, [(rule.DtStart.DayOfWeek, null)]);
+
+                    default:
+                        return t => RuleEnumerationUtils.FindCurrentOrNextBy(t, dsr.OuterUnit, dsr.InnerUnit, [GetUnitFromLocalDateTime(rule.DtStart, dsr.InnerUnit)]);
+                }
+            }
+
+            var missingByPartsWithExpansion = RecurrenceExpandRules.FallbackRules
+                .Where(x => !byRules.ContainsKey(x.Key))
+                .Where(x => RecurrenceExpandRules.FallbackRules.TryGetValue(x.Key, out var predicate) && predicate(rule))
+                .Select(x => x.Key);
+
+            components = components.Concat(missingByPartsWithExpansion.Select(BuildFallbackExpandByComponent));
+
+            var enumFactory = Enumerate(components.ToArray());
+
+            if (rule.BySetPos != null)
+                enumFactory = EnumerateWithSetPos(rule.Frequency.ToNodaPeriodUnits(), enumFactory, rule.BySetPos.ToArray());
+
+            if (rule.Count is not null)
+                enumFactory = EnumerateWithCount(rule.DtStart, enumFactory, rule.Count.Value);
+            else
+                enumFactory = EnumerateWithUntil(rule.DtStart, enumFactory, rule.Until);
+
+            return enumFactory;
+        }
+
+        public static IEnumerable<LocalDateTime> Enumerate(RecurrenceRule rule, LocalDateTime? start = null, LocalDateTime? end = null)
+            => BuildEnumerationFactory(rule)((start ?? rule.DtStart, end));
     }
 }

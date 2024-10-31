@@ -3781,7 +3781,7 @@ END:VCALENDAR
 
                 var startDates = occurrences.Select(x => x.Period.StartTime).ToList();
 
-                Assert.That(startDates, Is.EqualTo(testCase.Instances));
+                Assert.That(startDates, Is.EqualTo(testCase.Instances ?? []));
             }
         }
     }

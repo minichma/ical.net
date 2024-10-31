@@ -905,21 +905,6 @@ namespace Ical.Net.Evaluation
             return dates;
         }
 
-        private DataTypes.Period CreatePeriod(DateTime dt, IDateTime referenceDate)
-        {
-            // Turn each resulting date/time into an IDateTime and associate it
-            // with the reference date.
-            IDateTime newDt = new CalDateTime(dt, referenceDate.TzId);
-
-            // NOTE: fixes bug #2938007 - hasTime missing
-            newDt.HasTime = referenceDate.HasTime;
-
-            newDt.AssociateWith(referenceDate);
-
-            // Create a period from the new date/time.
-            return new DataTypes.Period(newDt);
-        }
-
         /// <summary>
         /// Evaluate the occurrences of this recurrence pattern.
         /// </summary>
@@ -939,85 +924,33 @@ namespace Ical.Net.Evaluation
                 referenceDate.HasTime = true;
             }
 
-            var components = new Func<LocalDateTime, LocalDateTimeAndPeriod>[]
-            {
-                (Pattern.Interval == 1) ? null : t => FindCurrentOrNextInterval(referenceDate.ToNodaLocalDateTime(), t, Pattern.Frequency.ToNodaPeriodUnits(), Pattern.Interval, (Pattern.Frequency == FrequencyType.Weekly) ? NodaTime.Period.FromDays(((int)Pattern.FirstDayOfWeek.ToNodaIsoDayOfWeek() - 1)) : null),
-                CreateByComponent(referenceDate, this.Pattern.BySecond, FrequencyType.Secondly, PeriodUnits.Minutes, PeriodUnits.Seconds, fallback: true),
-                CreateByComponent(referenceDate, this.Pattern.ByMinute, FrequencyType.Minutely, PeriodUnits.Hours, PeriodUnits.Minutes, fallback: true),
-                CreateByComponent(referenceDate, this.Pattern.ByHour, FrequencyType.Hourly, PeriodUnits.Days, PeriodUnits.Hours, fallback: true),
-                CreateByComponent(referenceDate, this.Pattern.ByMonthDay, FrequencyType.Daily, PeriodUnits.Months, PeriodUnits.Days, supportNegative: true, fallback: (Pattern.Frequency != FrequencyType.Weekly) && (Pattern.ByDay.Count == 0) && (Pattern.ByWeekNo.Count == 0) && (Pattern.ByYearDay.Count == 0)),
-                CreateByComponent(referenceDate, this.Pattern.ByMonth, FrequencyType.Monthly, PeriodUnits.Years, PeriodUnits.Months, supportNegative: false, fallback: (Pattern.ByWeekNo.Count == 0) && (Pattern.ByYearDay.Count == 0)),
-                CreateByComponent(referenceDate, this.Pattern.ByYearDay, FrequencyType.None, PeriodUnits.Years, PeriodUnits.Days, supportNegative: true),
-                CreateByWeekComponent(this.Pattern.ByWeekNo),
-                CreateByDayComponent(referenceDate, this.Pattern.ByDay),
+            DateTime? until = (Pattern.Until == DateTime.MinValue) ? null : new CalDateTime(Pattern.Until).ToTimeZone(referenceDate.TzId).Value;
 
-            }.Where(x => x != null)
-            .ToArray();
+            IReadOnlySet<int> ConvertBy(List<int> by) => (by.Count == 0) ? null : by.ToHashSet();
 
+            var rrule = new RecurrenceRule(
+                referenceDate.ToNodaLocalDateTime(),
+                referenceDate.HasTime,
+                Pattern.Frequency.ToAltRecur(),
+                Pattern.Interval,
+                ConvertBy(Pattern.ByMonth),
+                ConvertBy(Pattern.ByWeekNo),
+                ConvertBy(Pattern.ByYearDay),
+                ConvertBy(Pattern.ByMonthDay),
+                (Pattern.ByDay.Count == 0) ? null : Pattern.ByDay.Select(x => (x.DayOfWeek.ToNodaIsoDayOfWeek(), (x.Offset == int.MinValue) ? (int?)null : x.Offset)).ToHashSet(),
+                ConvertBy(Pattern.ByHour),
+                ConvertBy(Pattern.ByMinute),
+                ConvertBy(Pattern.BySecond),
+                ConvertBy(Pattern.BySetPosition),
+                (Pattern.Count == int.MinValue) ? null : Pattern.Count,
+                (until == null) ? null : LocalDateTime.FromDateTime(until.Value),
+                WeekStart: Pattern.FirstDayOfWeek.ToNodaIsoDayOfWeek());
 
-            var enumFactory = RuleEnumerationUtils.Enumerate(components);
-            if (this.Pattern.BySetPosition.Count != 0)
-                enumFactory = RuleEnumerationUtils.EnumerateWithSetPos(Pattern.Frequency.ToNodaPeriodUnits(), enumFactory, this.Pattern.BySetPosition.ToArray());
-
-            if (this.Pattern.Count != int.MinValue)
-                enumFactory = RuleEnumerationUtils.EnumerateWithCount(referenceDate.ToNodaLocalDateTime(), enumFactory, Pattern.Count);
-            else
-                enumFactory = RuleEnumerationUtils.EnumerateWithUntil(referenceDate.ToNodaLocalDateTime(), enumFactory, (Pattern.Until != DateTime.MinValue) ? LocalDateTime.FromDateTime(Pattern.Until.AddDays(1)) : null);
-
-            var until = (Pattern.Until == DateTime.MinValue) ? null : new CalDateTime(Pattern.Until);
-            var res = enumFactory((LocalDateTime.FromDateTime(periodStart), LocalDateTime.FromDateTime(periodEnd)))
+            var res = Enumerate(rrule, LocalDateTime.FromDateTime(periodStart), LocalDateTime.FromDateTime(periodEnd))
                 .Select(x => new DataTypes.Period(x.ToCalDateTime(referenceDate.TzId)))
-                .Where(x => (until == null) || (x.StartTime.CompareTo(until) <= 0))
                 .ToHashSet();
 
             return res;
-        }
-
-
-        private Func<LocalDateTime, LocalDateTimeAndPeriod> CreateByDayComponent(IDateTime refTime, List<WeekDay> by)
-        {
-            var outerUnit = Pattern.Frequency switch
-            {
-                FrequencyType.Monthly => PeriodUnits.Months,
-                FrequencyType.Yearly when Pattern.ByMonth.Count != 0 => PeriodUnits.Months,
-                FrequencyType.Yearly => PeriodUnits.Years,
-                _ => PeriodUnits.None
-            };
-
-            if ((by?.Count ?? 0) != 0)
-                return t => RuleEnumerationUtils.FindCurrentOrNextByDay(
-                    t,
-                    outerUnit,
-                    by.Select(x =>
-                        (x.DayOfWeek.ToNodaIsoDayOfWeek(),
-                            (x.Offset == int.MinValue) ? (int?)null : x.Offset)).ToArray());
-
-            if ((Pattern.Frequency == FrequencyType.Weekly) || (Pattern.ByWeekNo.Count != 0))
-                return t => RuleEnumerationUtils.FindCurrentOrNextByDay(t, outerUnit, [(refTime.ToNodaLocalDateTime().DayOfWeek, null)]);
-
-            return null;
-        }
-
-        private Func<LocalDateTime, LocalDateTimeAndPeriod> CreateByComponent(IDateTime refTime, List<int> by, FrequencyType frequencyType, PeriodUnits outerUnit, PeriodUnits innerUnit, bool supportNegative = false, bool fallback = false)
-        {
-            if ((by?.Count ?? 0) != 0)
-            {
-                if (refTime.HasTime || (frequencyType > FrequencyType.Hourly))
-                    return t => RuleEnumerationUtils.FindCurrentOrNextBy(t, outerUnit, innerUnit, by.ToArray(), supportNegative);
-            }
-
-            if (fallback && (Pattern.Frequency > frequencyType))
-                return t => RuleEnumerationUtils.FindCurrentOrNextBy(t, outerUnit, innerUnit, [refTime.ToNodaLocalDateTime().GetLocalTimeComponent(innerUnit)]);
-
-            return null;
-        }
-
-        private Func<LocalDateTime, LocalDateTimeAndPeriod> CreateByWeekComponent(List<int> by)
-        {
-            if ((by?.Count ?? 0) != 0)
-                return t => RuleEnumerationUtils.FindCurrentOrNextByWeekNo(t, by.ToArray(), Pattern.FirstDayOfWeek.ToNodaIsoDayOfWeek());
-
-            return null;
         }
     }
 }
