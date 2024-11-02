@@ -81,7 +81,7 @@ namespace AltRecur
                 _ => throw new ApplicationException()
             };
 
-        public static LocalDateTimeAndPeriod FindCurrentOrNextInterval(LocalDateTime dtStart, LocalDateTime t, PeriodUnits unit, int interval, Period? offset)
+        public static LocalDateTimePeriod FindCurrentOrNextInterval(LocalDateTime dtStart, LocalDateTime t, PeriodUnits unit, int interval, Period? offset)
         {
             var dtStartFloored = FloorTo(dtStart, unit);
             if (offset != null)
@@ -97,10 +97,10 @@ namespace AltRecur
 
             var inc = GetPeriod(unit, incUnits);
             var res = dtStartFloored.Plus(inc);
-            return new(res, GetPeriod(unit));
+            return new(res, res.Plus(GetPeriod(unit)));
         }
 
-        private static LocalDateTimeAndPeriod FindCurrentOrNextByWeekDay(LocalDateTime t, IsoDayOfWeek[] by)
+        private static LocalDateTimePeriod FindCurrentOrNextByWeekDay(LocalDateTime t, IsoDayOfWeek[] by)
         {
             // Floor to period boundary (start of sec, min, hour)
             t = t.Date.AtMidnight();
@@ -108,24 +108,24 @@ namespace AltRecur
             while (!by.Contains(t.DayOfWeek))
                 t = t.PlusDays(1);
 
-            return new(t, Period.FromDays(1));
+            return new(t, t.PlusDays(1));
         }
 
-        public static LocalDateTimeAndPeriod FindCurrentOrNextByDay(LocalDateTime t, PeriodUnits outerUnit, (IsoDayOfWeek dow, int? ord)[] by)
+        public static LocalDateTimePeriod FindCurrentOrNextByDay(LocalDateTime t, PeriodUnits outerUnit, (IsoDayOfWeek dow, int? ord)[] by)
         {
             var byWithOrd = by.Where(x => x.ord.HasValue).Select(x => (x.dow, ord: x.ord!.Value)).ToArray();
             var byWithoutOrd = by.Where(x => !x.ord.HasValue).Select(x => x.dow).ToArray();
 
-            LocalDateTimeAndPeriod[] t1 = byWithOrd.Any() ? [FindCurrentOrNextByDayWithOrd(t, outerUnit, byWithOrd)] : [];
-            LocalDateTimeAndPeriod[] t2 = byWithoutOrd.Any() ? [FindCurrentOrNextByWeekDay(t, byWithoutOrd)] : [];
+            LocalDateTimePeriod[] t1 = byWithOrd.Any() ? [FindCurrentOrNextByDayWithOrd(t, outerUnit, byWithOrd)] : [];
+            LocalDateTimePeriod[] t2 = byWithoutOrd.Any() ? [FindCurrentOrNextByWeekDay(t, byWithoutOrd)] : [];
 
-            LocalDateTimeAndPeriod[] candidates = [.. t1, .. t2];
+            LocalDateTimePeriod[] candidates = [.. t1, .. t2];
 
             var res = candidates.MinBy(x => x.Start);
             return res!;
         }
 
-        private static LocalDateTimeAndPeriod FindCurrentOrNextByDayWithOrd(LocalDateTime t, PeriodUnits outerUnit, (IsoDayOfWeek dow, int ord)[] by)
+        private static LocalDateTimePeriod FindCurrentOrNextByDayWithOrd(LocalDateTime t, PeriodUnits outerUnit, (IsoDayOfWeek dow, int ord)[] by)
             => FindCurrentOrNextByInner(t, FloorTo(t, outerUnit), t => t.Plus(GetPeriod(outerUnit)), PeriodUnits.Days, 1, periodStart => GetByDaysWithOrd(periodStart, outerUnit, by));
 
         private static int[] GetByDaysWithOrd(LocalDateTime t, PeriodUnits outerUnit, (IsoDayOfWeek dow, int ord)[] by)
@@ -150,13 +150,13 @@ namespace AltRecur
             return ((ord - 1) * 7) + (dow - startDoW + 7) % 7 + 1;
         }
 
-        public static LocalDateTimeAndPeriod FindCurrentOrNextBy(LocalDateTime t, PeriodUnits outerUnit, PeriodUnits innerUnit, int[] by, bool supportNegative = false)
+        public static LocalDateTimePeriod FindCurrentOrNextBy(LocalDateTime t, PeriodUnits outerUnit, PeriodUnits innerUnit, int[] by, bool supportNegative = false)
             => FindCurrentOrNextByInner(t, FloorTo(t, outerUnit), t => t.Plus(GetPeriod(outerUnit)), innerUnit, GetUnitFromLocalDateTime(FloorTo(t, outerUnit), innerUnit), t => PrepareByArray(t, outerUnit, innerUnit, by, supportNegative));
 
-        public static LocalDateTimeAndPeriod FindCurrentOrNextByWeekNo(LocalDateTime t, int[] by, IsoDayOfWeek startOfWeek)
+        public static LocalDateTimePeriod FindCurrentOrNextByWeekNo(LocalDateTime t, int[] by, IsoDayOfWeek startOfWeek)
             => FindCurrentOrNextByInner(t, GetStartOfWeekOne(t, startOfWeek), t => t.PlusWeeks(GetWeeksInYear(t, startOfWeek)), PeriodUnits.Weeks, 1, t => PrepareByWeekNoArray(t, by, startOfWeek));
 
-        private static LocalDateTimeAndPeriod FindCurrentOrNextByInner(LocalDateTime t, LocalDateTime outerStart, Func<LocalDateTime, LocalDateTime> incOuter, PeriodUnits innerUnit, int unitMinValue, Func<LocalDateTime, int[]> getByByPeriod)
+        private static LocalDateTimePeriod FindCurrentOrNextByInner(LocalDateTime t, LocalDateTime outerStart, Func<LocalDateTime, LocalDateTime> incOuter, PeriodUnits innerUnit, int unitMinValue, Func<LocalDateTime, int[]> getByByPeriod)
         {
             // Floor to period boundary (start of sec, min, hour)
             bool first = true;
@@ -180,7 +180,7 @@ namespace AltRecur
 
             outerStart = outerStart.Plus(GetPeriod(innerUnit, next - unitMinValue));
 
-            return new(outerStart, GetPeriod(innerUnit));
+            return new(outerStart, outerStart.Plus(GetPeriod(innerUnit)));
         }
 
         private static int[] PrepareByArray(LocalDateTime t, PeriodUnits outerUnit, PeriodUnits innerUnit, int[] by, bool supportNegative)
@@ -209,11 +209,11 @@ namespace AltRecur
             return PrepareByArray(by, true, totalIncs, v0);
         }
 
-        public delegate LocalDateTimeAndPeriod IncTimeDelegate(LocalDateTime t);
+        public delegate LocalDateTimePeriod IncTimeDelegate(LocalDateTime t);
 
-        private class LocalDateTimeAndPeriodHolder(LocalDateTimeAndPeriod value)
+        private class LocalDateTimeAndPeriodHolder(LocalDateTimePeriod value)
         {
-            public LocalDateTimeAndPeriod Value { get; set; } = value;
+            public LocalDateTimePeriod Value { get; set; } = value;
         }
 
         public static Func<(LocalDateTime start, LocalDateTime? end), IEnumerable<LocalDateTime>> EnumerateWithCount(LocalDateTime dtStart, Func<(LocalDateTime start, LocalDateTime? end), IEnumerable<LocalDateTime>> inner, int count)
@@ -281,7 +281,7 @@ namespace AltRecur
                 if (comb != null)
                     yield return comb.Start;
 
-                var minEnd = state.Select(x => x.t.Value.Start + x.t.Value.Period).Min();
+                var minEnd = state.Select(x => x.t.Value.End).Min();
                 var maxStart = state.Select(x => x.t.Value.Start).Max();
                 var threshold = (minEnd > maxStart) ? minEnd : maxStart;
 
@@ -291,7 +291,7 @@ namespace AltRecur
                     proceeded = false;
                     foreach (var item in state)
                     {
-                        if ((item.t.Value.Start + item.t.Value.Period) <= threshold)
+                        if ((item.t.Value.End) <= threshold)
                         {
                             item.t.Value = item.inc.CurrentOrNext(threshold);
                             if (threshold < item.t.Value.Start)
@@ -384,7 +384,7 @@ namespace AltRecur
             {
                 var dsr = RecurrenceExpandRules.ByPartDescriptors[byPart];
 
-                Func<LocalDateTime, LocalDateTimeAndPeriod> f = byPart switch
+                Func<LocalDateTime, LocalDateTimePeriod> f = byPart switch
                 {
                     ByPart.ByWeekNo => t => RuleEnumerationUtils.FindCurrentOrNextByWeekNo(t, byValues.ToArray(), rule.WeekStart ?? IsoDayOfWeek.Monday),
                     ByPart.ByDay => t => RuleEnumerationUtils.FindCurrentOrNextByDay(t, GetByDayOuterUnit(), rule.ByDay!.ToArray()),

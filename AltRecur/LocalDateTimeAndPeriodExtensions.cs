@@ -2,15 +2,15 @@
 {
     public static class LocalDateTimeAndPeriodExtensions
     {
-        public static LocalDateTimeAndPeriod? IntersectDt(this IEnumerable<LocalDateTimeAndPeriod> ts)
+        public static LocalDateTimePeriod? IntersectDt(this IEnumerable<LocalDateTimePeriod> ts)
         {
             var t = ts.Max(x => x.Start);
-            var end = ts.Min(x => x.Start.Plus(x.Period));
+            var end = ts.Min(x => x.End);
 
             if (end <= t)
                 return null;
 
-            return new(t, end.Minus(t));
+            return new(t, end);
         }
     }
 }

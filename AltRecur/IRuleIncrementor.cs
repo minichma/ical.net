@@ -4,6 +4,6 @@ namespace AltRecur
 {
     public interface IRuleIncrementor
     {
-        LocalDateTimeAndPeriod CurrentOrNext(LocalDateTime t);
+        LocalDateTimePeriod CurrentOrNext(LocalDateTime t);
     }
 }
