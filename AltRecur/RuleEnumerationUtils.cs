@@ -268,12 +268,12 @@ namespace AltRecur
             }
         }
 
-        public static Func<(LocalDateTime start, LocalDateTime? end), IEnumerable<LocalDateTime>> Enumerate(Func<LocalDateTime, LocalDateTimeAndPeriod>[] components)
+        public static Func<(LocalDateTime start, LocalDateTime? end), IEnumerable<LocalDateTime>> Enumerate(IRuleIncrementor[] components)
             => arg => Enumerate(arg.start, arg.end, components);
 
-        public static IEnumerable<LocalDateTime> Enumerate(LocalDateTime start, LocalDateTime? end, Func<LocalDateTime, LocalDateTimeAndPeriod>[] components)
+        public static IEnumerable<LocalDateTime> Enumerate(LocalDateTime start, LocalDateTime? end, IRuleIncrementor[] components)
         {
-            var state = components.Select(x => (inc: x, t: new LocalDateTimeAndPeriodHolder(x(start)))).ToArray();
+            var state = components.Select(x => (inc: x, t: new LocalDateTimeAndPeriodHolder(x.CurrentOrNext(start)))).ToArray();
             while ((end == null) || !state.Any(s => s.t.Value.Start > end))
             {
                 var comb = state.Select(x => x.t.Value).IntersectDt();
@@ -293,7 +293,7 @@ namespace AltRecur
                     {
                         if ((item.t.Value.Start + item.t.Value.Period) <= threshold)
                         {
-                            item.t.Value = item.inc(threshold);
+                            item.t.Value = item.inc.CurrentOrNext(threshold);
                             if (threshold < item.t.Value.Start)
                             {
                                 threshold = item.t.Value.Start;
@@ -368,8 +368,8 @@ namespace AltRecur
             // The offset of the start of week relative to Monday (Tuesday = +1, ...)
             var weekDayOffset = NodaTime.Period.FromDays((int)(rule.WeekStart ?? IsoDayOfWeek.Monday) - (int)IsoDayOfWeek.Monday);
 
-            IEnumerable<Func<LocalDateTime, LocalDateTimeAndPeriod>> components = [
-                t => FindCurrentOrNextInterval(rule.DtStart, t, rule.Frequency.ToNodaPeriodUnits(), rule.Interval, (rule.Frequency == RuleFrequency.Weekly) ? weekDayOffset : null)];
+            IEnumerable<IRuleIncrementor> components = [new RuleIncrementor(
+                t => FindCurrentOrNextInterval(rule.DtStart, t, rule.Frequency.ToNodaPeriodUnits(), rule.Interval, (rule.Frequency == RuleFrequency.Weekly) ? weekDayOffset : null))];
 
             PeriodUnits GetByDayOuterUnit()
                 => rule.Frequency switch
@@ -380,16 +380,18 @@ namespace AltRecur
                     _ => PeriodUnits.None
                 };
 
-            Func<LocalDateTime, LocalDateTimeAndPeriod> BuildByComponent(ByPart byPart, IReadOnlySet<int> byValues)
+            RuleIncrementor BuildByComponent(ByPart byPart, IReadOnlySet<int> byValues)
             {
                 var dsr = RecurrenceExpandRules.ByPartDescriptors[byPart];
 
-                return byPart switch
+                Func<LocalDateTime, LocalDateTimeAndPeriod> f = byPart switch
                 {
                     ByPart.ByWeekNo => t => RuleEnumerationUtils.FindCurrentOrNextByWeekNo(t, byValues.ToArray(), rule.WeekStart ?? IsoDayOfWeek.Monday),
                     ByPart.ByDay => t => RuleEnumerationUtils.FindCurrentOrNextByDay(t, GetByDayOuterUnit(), rule.ByDay!.ToArray()),
                     _ => t => RuleEnumerationUtils.FindCurrentOrNextBy(t, dsr.OuterUnit, dsr.InnerUnit, byValues.ToArray(), dsr.SupportNegative)
                 };
+
+                return new RuleIncrementor(f);
             }
 
             var byRules = rule.GetByRules();
@@ -399,16 +401,16 @@ namespace AltRecur
                 .Where(byRule => rule.hasTime || !RecurrenceExpandRules.ByPartDescriptors[byRule.Key].IsTime)
                 .Select(byRule => BuildByComponent(byRule.Key, byRule.Value)));
 
-            Func<LocalDateTime, LocalDateTimeAndPeriod> BuildFallbackExpandByComponent(ByPart byPart)
+            RuleIncrementor BuildFallbackExpandByComponent(ByPart byPart)
             {
                 var dsr = RecurrenceExpandRules.ByPartDescriptors[byPart];
                 switch (byPart)
                 {
                     case ByPart.ByDay:
-                        return t => RuleEnumerationUtils.FindCurrentOrNextByDay(t, PeriodUnits.None, [(rule.DtStart.DayOfWeek, null)]);
+                        return new RuleIncrementor(t => RuleEnumerationUtils.FindCurrentOrNextByDay(t, PeriodUnits.None, [(rule.DtStart.DayOfWeek, null)]));
 
                     default:
-                        return t => RuleEnumerationUtils.FindCurrentOrNextBy(t, dsr.OuterUnit, dsr.InnerUnit, [GetUnitFromLocalDateTime(rule.DtStart, dsr.InnerUnit)]);
+                        return new RuleIncrementor(t => RuleEnumerationUtils.FindCurrentOrNextBy(t, dsr.OuterUnit, dsr.InnerUnit, [GetUnitFromLocalDateTime(rule.DtStart, dsr.InnerUnit)]));
                 }
             }
 
