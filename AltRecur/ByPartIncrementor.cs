@@ -29,24 +29,25 @@ namespace AltRecur
                 {
                     outerStart = IncOuter(FloorOuter(outerStart, startOfWeek), startOfWeek);
                     preparedBy = byArrayResolver.GetResolvedByArray(outerStart);
+                    t = outerStart;
                 }
             } while (next < 0);
 
-            var res = outerStart;
+            var res = t;
             if (currentUnitVal != next)
                 res = IncInner(res, next - currentUnitVal);
 
             return new(res, IncInner(res, 1));
         }
 
-        public static Func<LocalDateTime, LocalDateTimePeriod> Build(int[] by, IsoDayOfWeek startOfWeek, ByPart byPart)
+        public static IRuleIncrementor Build(int[] by, IsoDayOfWeek startOfWeek, ByPart byPart)
         {
             var dsr = ByPartDescriptors[byPart];
             var incrementor = new ByPartIncrementor(startOfWeek, dsr.BuildByArrayResolver(by, startOfWeek), dsr.GetValue, dsr.FloorOuter, dsr.IncOuter, dsr.IncInner);
-            return incrementor.CurrentOrNext;
+            return incrementor;
         }
 
-        public static Func<LocalDateTime, LocalDateTimePeriod> BuildByDay((IsoDayOfWeek dow, int? ord)[] by, RuleFrequency outerFreq , IsoDayOfWeek startOfWeek)
+        public static IRuleIncrementor BuildByDay((IsoDayOfWeek dow, int? ord)[] by, RuleFrequency outerFreq , IsoDayOfWeek startOfWeek)
         {
             var byWithOrd = by.Where(x => x.ord.HasValue).Select(x => (x.dow, ord: x.ord!.Value)).ToArray();
             var byWithoutOrd = by.Where(x => !x.ord.HasValue).Select(x => ((int)(x.dow + 7 - startOfWeek)) % 7).ToArray();
@@ -77,9 +78,9 @@ namespace AltRecur
                         return (res1.Start <= res2.Start) ? res1 : res2;
                     }
 
-                    return FindComposed;
+                    return new RuleIncrementor(FindComposed);
                 default:
-                    return (i1 ?? i2)!.CurrentOrNext;
+                    return (i1 ?? i2)!;
             }
         }
     }

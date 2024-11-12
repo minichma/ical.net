@@ -30,14 +30,14 @@ namespace AltRecur
 
         internal static IReadOnlyDictionary<ByPart, ByPartDescriptor> ByPartDescriptors { get; } = new Dictionary<ByPart, ByPartDescriptor>()
         {
-            { ByPart.ByMonth, new(false, false, PeriodUnits.Years, PeriodUnits.Months, 1, 12, (by, _) => ByArrayResolver.Static(by), (t, _) => t.Month, (t, _) => t.FloorTo(PeriodUnits.Years), (t, _) => t.PlusYears(1), (t, i) => t.PlusMonths(i)) },
-            { ByPart.ByWeekNo, new(true, false, PeriodUnits.Years, PeriodUnits.Weeks, -53, 53, ByArrayResolver.DynamicByWeekNo, GetWeekNo, GetStartOfWeek, (t, sow) => GetStartOfWeek(t, sow).PlusWeeks(GetWeeksInYear(t, sow)), (t, i) => t.PlusWeeks(i)) },
-            { ByPart.ByYearDay, new(true, false, PeriodUnits.Years, PeriodUnits.Days, -366, 366, (by, _) => ByArrayResolver.DynamicBy(by, PeriodUnits.Years, PeriodUnits.Days), (t, _) => t.DayOfYear, (t, _) => t.FloorTo(PeriodUnits.Years), (t, _) => t.PlusYears(1), (t, i) => t.PlusDays(i)) },
-            { ByPart.ByMonthDay, new(true, false, PeriodUnits.Months, PeriodUnits.Days, -31, 31, (by, _) => ByArrayResolver.DynamicBy(by, PeriodUnits.Months, PeriodUnits.Days), (t, _) => t.Day, (t, _) => t.FloorTo(PeriodUnits.Years), (t, _) => t.PlusYears(1), (t, i) => t.PlusDays(i)) },
+            { ByPart.ByMonth, new(false, false, PeriodUnits.Years, PeriodUnits.Months, 1, 12, (by, _) => ByArrayResolver.Static(by), (t, _) => t.Month, (t, _) => t.FloorTo(PeriodUnits.Years, IsoDayOfWeek.None), (t, _) => t.PlusYears(1), (t, i) => t.PlusMonths(i)) },
+            { ByPart.ByWeekNo, new(true, false, PeriodUnits.Years, PeriodUnits.Weeks, -53, 53, ByArrayResolver.DynamicByWeekNo, GetWeekNo, GetStartOfWeekOne, (t, sow) => GetStartOfWeek(t, sow).PlusWeeks(GetWeeksInYear(t, sow)), (t, i) => t.PlusWeeks(i)) },
+            { ByPart.ByYearDay, new(true, false, PeriodUnits.Years, PeriodUnits.Days, -366, 366, (by, _) => ByArrayResolver.DynamicBy(by, PeriodUnits.Years, PeriodUnits.Days), (t, _) => t.DayOfYear, (t, _) => t.FloorTo(PeriodUnits.Years, IsoDayOfWeek.None), (t, _) => t.PlusYears(1), (t, i) => t.PlusDays(i)) },
+            { ByPart.ByMonthDay, new(true, false, PeriodUnits.Months, PeriodUnits.Days, -31, 31, (by, _) => ByArrayResolver.DynamicBy(by, PeriodUnits.Months, PeriodUnits.Days), (t, _) => t.Day, (t, _) => t.FloorTo(PeriodUnits.Months, IsoDayOfWeek.None), (t, _) => t.PlusMonths(1), (t, i) => t.PlusDays(i)) },
             { ByPart.ByDay, new(true, false, PeriodUnits.Weeks, PeriodUnits.Days, 0, 0, (_, _) => throw new ApplicationException(), (t, sow) => ((int)t.DayOfWeek + 7 - (int)sow) % 7, (t, sow) => t.Date.PlusDays(1).Previous(sow).AtMidnight(), (t, _) => t.PlusWeeks(1), (t, i) => t.PlusDays(i)) },
-            { ByPart.ByHour, new(false, true, PeriodUnits.Days, PeriodUnits.Hours, 0, 23, (by, _) => ByArrayResolver.Static(by), (t, _) => t.Hour, (t, _) => t.FloorTo(PeriodUnits.Days), (t, _) => t.PlusDays(1), (t, i) => t.PlusHours(i)) },
-            { ByPart.ByMinute, new(false, true, PeriodUnits.Hours, PeriodUnits.Minutes, 0, 59, (by, _) => ByArrayResolver.Static(by), (t, _) => t.Minute, (t, _) => t.FloorTo(PeriodUnits.Hours), (t, _) => t.PlusHours(1), (t, i) => t.PlusMinutes(i)) },
-            { ByPart.BySecond, new(false, true, PeriodUnits.Minutes, PeriodUnits.Seconds, 0, 59, (by, _) => ByArrayResolver.Static(by), (t, _) => t.Second, (t, _) => t.FloorTo(PeriodUnits.Minutes), (t, _) => t.PlusMinutes(1), (t, i) => t.PlusSeconds(i)) },
+            { ByPart.ByHour, new(false, true, PeriodUnits.Days, PeriodUnits.Hours, 0, 23, (by, _) => ByArrayResolver.Static(by), (t, _) => t.Hour, (t, _) => t.FloorTo(PeriodUnits.Days, IsoDayOfWeek.None), (t, _) => t.PlusDays(1), (t, i) => t.PlusHours(i)) },
+            { ByPart.ByMinute, new(false, true, PeriodUnits.Hours, PeriodUnits.Minutes, 0, 59, (by, _) => ByArrayResolver.Static(by), (t, _) => t.Minute, (t, _) => t.FloorTo(PeriodUnits.Hours, IsoDayOfWeek.None), (t, _) => t.PlusHours(1), (t, i) => t.PlusMinutes(i)) },
+            { ByPart.BySecond, new(false, true, PeriodUnits.Minutes, PeriodUnits.Seconds, 0, 59, (by, _) => ByArrayResolver.Static(by), (t, _) => t.Second, (t, _) => t.FloorTo(PeriodUnits.Minutes, IsoDayOfWeek.None), (t, _) => t.PlusMinutes(1), (t, i) => t.PlusSeconds(i)) },
             { ByPart.BySetPos, new(false, false, PeriodUnits.None, PeriodUnits.None, -366, 366, (_, _) => throw new ApplicationException(), (_, _) => throw new ApplicationException(), (_, _) => throw new ApplicationException(), (_, _) => throw new ApplicationException(), (_, _) => throw new ApplicationException()) },
         };
 
@@ -172,7 +172,7 @@ namespace AltRecur
             foreach (var byRule in byRules)
             {
                 var ruleDsr = ByPartDescriptors[byRule.Key];
-                if (byRule.Value.Any(by =>
+                if ((ruleDsr.MaxValue != 0) && byRule.Value.Any(by =>
                     (by < ruleDsr.MinValue)
                     || (by > ruleDsr.MaxValue)
                     || (ruleDsr.SupportNegative && (by == 0))))

@@ -22,7 +22,7 @@ namespace AltRecur
         {
             int[] GetResolvedByArray(LocalDateTime t)
             {
-                var outerFlooredT = RuleEnumerationUtils.FloorTo(t, outerUnit);
+                var outerFlooredT = RuleEnumerationUtils.FloorTo(t, outerUnit, IsoDayOfWeek.None);
                 var totalIncs = RuleEnumerationUtils.GetPeriodUnits(Period.Between(outerFlooredT, outerFlooredT.Plus(RuleEnumerationUtils.GetPeriod(outerUnit)), innerUnit), innerUnit);
                 var res = by
                     .Select(x => (x >= 0) ? x : (totalIncs + 1 + x))
@@ -57,7 +57,7 @@ namespace AltRecur
         {
             int[] GetResolvedByArray(LocalDateTime t)
             {
-                var startOfOuter = t.FloorTo(outerUnit).Date;
+                var startOfOuter = t.FloorTo(outerUnit, IsoDayOfWeek.None).Date;
                 var endOfOuter = startOfOuter.Plus(RuleEnumerationUtils.GetPeriod(outerUnit)).PlusDays(-1);
 
                 var res = by

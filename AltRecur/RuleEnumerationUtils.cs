@@ -5,13 +5,14 @@ namespace AltRecur
 {
     public static class RuleEnumerationUtils
     {
-        public static LocalDateTime FloorTo(this LocalDateTime t, PeriodUnits PeriodUnits)
+        public static LocalDateTime FloorTo(this LocalDateTime t, PeriodUnits PeriodUnits, IsoDayOfWeek startOfWeek)
             => PeriodUnits switch
             {
                 PeriodUnits.Seconds => t.Date.At(new LocalTime(t.Hour, t.Minute, t.Second)),
                 PeriodUnits.Minutes => t.Date.At(new LocalTime(t.Hour, t.Minute)),
                 PeriodUnits.Hours => t.Date.At(new LocalTime(t.Hour, 0)),
                 PeriodUnits.Days => t.Date.AtMidnight(),
+                PeriodUnits.Weeks => GetStartOfWeek(t, startOfWeek),
                 PeriodUnits.Months => new LocalDate(t.Year, t.Month, 1, t.Calendar).AtMidnight(),
                 PeriodUnits.Years => new LocalDate(t.Year, 1, 1, t.Calendar).AtMidnight(),
                 _ => throw new ApplicationException()
@@ -55,9 +56,9 @@ namespace AltRecur
                 _ => throw new ApplicationException()
             };
 
-        public static LocalDateTimePeriod FindCurrentOrNextInterval(LocalDateTime dtStart, LocalDateTime t, PeriodUnits unit, int interval, Period? offset)
+        public static LocalDateTimePeriod FindCurrentOrNextInterval(LocalDateTime dtStart, LocalDateTime t, PeriodUnits unit, int interval, Period? offset, IsoDayOfWeek startOfWeek)
         {
-            var dtStartFloored = FloorTo(dtStart, unit);
+            var dtStartFloored = FloorTo(dtStart, unit, startOfWeek);
             if (offset != null)
             {
                 dtStartFloored = dtStartFloored.Plus(offset);
@@ -72,111 +73,6 @@ namespace AltRecur
             var inc = GetPeriod(unit, incUnits);
             var res = dtStartFloored.Plus(inc);
             return new(res, res.Plus(GetPeriod(unit)));
-        }
-
-        private static LocalDateTimePeriod FindCurrentOrNextByWeekDay(LocalDateTime t, IsoDayOfWeek[] by)
-        {
-            // Floor to period boundary (start of sec, min, hour)
-            t = t.Date.AtMidnight();
-
-            while (!by.Contains(t.DayOfWeek))
-                t = t.PlusDays(1);
-
-            return new(t, t.PlusDays(1));
-        }
-
-        public static LocalDateTimePeriod FindCurrentOrNextByDay(LocalDateTime t, PeriodUnits outerUnit, (IsoDayOfWeek dow, int? ord)[] by)
-        {
-            var byWithOrd = by.Where(x => x.ord.HasValue).Select(x => (x.dow, ord: x.ord!.Value)).ToArray();
-            var byWithoutOrd = by.Where(x => !x.ord.HasValue).Select(x => x.dow).ToArray();
-
-            LocalDateTimePeriod[] t1 = byWithOrd.Any() ? [FindCurrentOrNextByDayWithOrd(t, outerUnit, byWithOrd)] : [];
-            LocalDateTimePeriod[] t2 = byWithoutOrd.Any() ? [FindCurrentOrNextByWeekDay(t, byWithoutOrd)] : [];
-
-            LocalDateTimePeriod[] candidates = [.. t1, .. t2];
-
-            var res = candidates.MinBy(x => x.Start);
-            return res!;
-        }
-
-        private static LocalDateTimePeriod FindCurrentOrNextByDayWithOrd(LocalDateTime t, PeriodUnits outerUnit, (IsoDayOfWeek dow, int ord)[] by)
-            => FindCurrentOrNextByInner(t, FloorTo(t, outerUnit), t => t.Plus(GetPeriod(outerUnit)), PeriodUnits.Days, 1, periodStart => GetByDaysWithOrd(periodStart, outerUnit, by));
-
-        internal static int[] GetByDaysWithOrd(LocalDateTime t, PeriodUnits outerUnit, (IsoDayOfWeek dow, int ord)[] by)
-        {
-            var totalIncs = GetPeriodUnits(Period.Between(t, t.Plus(GetPeriod(outerUnit)), PeriodUnits.Days), PeriodUnits.Days);
-            var startDoW = t.DayOfWeek;
-
-            var res = by.Select(x => GetMonthOrYearDayFromDowAndOrd(startDoW, totalIncs, x.dow, x.ord));
-
-            res = res.Where(x => (x >= 1) && (x < (totalIncs + 1)));
-            return res.ToArray();
-        }
-
-        private static int GetMonthOrYearDayFromDowAndOrd(IsoDayOfWeek startDoW, int totalDays, IsoDayOfWeek dow, int ord)
-        {
-            if (ord < 0)
-            {
-                var nofDowInPeriod = ((totalDays - (dow - startDoW + 7) % 7) + 6) / 7;
-                ord = nofDowInPeriod + 1 + ord;
-            }
-
-            return ((ord - 1) * 7) + (dow - startDoW + 7) % 7 + 1;
-        }
-
-        public static LocalDateTimePeriod FindCurrentOrNextBy(LocalDateTime t, PeriodUnits outerUnit, PeriodUnits innerUnit, int[] by, bool supportNegative = false)
-            => FindCurrentOrNextByInner(t, FloorTo(t, outerUnit), t => t.Plus(GetPeriod(outerUnit)), innerUnit, GetUnitFromLocalDateTime(FloorTo(t, outerUnit), innerUnit), t => PrepareByArray(t, outerUnit, innerUnit, by, supportNegative));
-
-        public static LocalDateTimePeriod FindCurrentOrNextByWeekNo(LocalDateTime t, int[] by, IsoDayOfWeek startOfWeek)
-            => FindCurrentOrNextByInner(t, GetStartOfWeekOne(t, startOfWeek), t => t.PlusWeeks(GetWeeksInYear(t, startOfWeek)), PeriodUnits.Weeks, 1, t => PrepareByWeekNoArray(t, by, startOfWeek));
-
-        private static LocalDateTimePeriod FindCurrentOrNextByInner(LocalDateTime t, LocalDateTime outerStart, Func<LocalDateTime, LocalDateTime> incOuter, PeriodUnits innerUnit, int unitMinValue, Func<LocalDateTime, int[]> getByByPeriod)
-        {
-            // Floor to period boundary (start of sec, min, hour)
-            bool first = true;
-            int next;
-            do
-            {
-                var preparedBy = getByByPeriod(outerStart);
-
-                next = first
-                    ? preparedBy.Where(x => x >= GetPeriodUnits(Period.Between(outerStart, t, innerUnit), innerUnit) + unitMinValue).FirstOrDefault(-1)
-                    : preparedBy.FirstOrDefault(-1);
-
-                if (next < 0)
-                {
-                    outerStart = incOuter(outerStart);
-                    preparedBy = getByByPeriod(outerStart);
-                }
-
-                first = false;
-            } while (next < 0);
-
-            outerStart = outerStart.Plus(GetPeriod(innerUnit, next - unitMinValue));
-
-            return new(outerStart, outerStart.Plus(GetPeriod(innerUnit)));
-        }
-
-        private static int[] PrepareByArray(LocalDateTime t, PeriodUnits outerUnit, PeriodUnits innerUnit, int[] by, bool supportNegative)
-        {
-            var outerFlooredT = FloorTo(t, outerUnit);
-            var totalIncs = GetPeriodUnits(Period.Between(outerFlooredT, outerFlooredT.Plus(GetPeriod(outerUnit)), innerUnit), innerUnit);
-            var v0 = GetUnitFromLocalDateTime(t, innerUnit);
-            return PrepareByArray(by, supportNegative, totalIncs, v0);
-        }
-
-        private static int[] PrepareByArray(int[] by, bool supportNegative, int totalIncs, int current)
-            => by
-                .Select(x => (x >= 0) ? x : (totalIncs + 1 + x))
-                .Where(x => (x >= current) && (x <= totalIncs))
-                .OrderBy(x => x)
-                .ToArray();
-
-        private static int[] PrepareByWeekNoArray(LocalDateTime t, int[] by, IsoDayOfWeek startOfWeek)
-        {
-            var totalIncs = GetWeeksInYear(t, startOfWeek);
-            var v0 = GetWeekNo(t, startOfWeek);
-            return PrepareByArray(by, true, totalIncs, v0);
         }
 
         public delegate LocalDateTimePeriod IncTimeDelegate(LocalDateTime t);
@@ -206,19 +102,19 @@ namespace AltRecur
             };
         }
 
-        public static Func<(LocalDateTime start, LocalDateTime? end), IEnumerable<LocalDateTime>> EnumerateWithSetPos(PeriodUnits freq, Func<(LocalDateTime start, LocalDateTime? end), IEnumerable<LocalDateTime>> inner, int[] setPos)
-            => arg => EnumerateWithSetPos(arg.start, arg.end, freq, inner, setPos);
+        internal static Func<(LocalDateTime start, LocalDateTime? end), IEnumerable<LocalDateTime>> EnumerateWithSetPos(PeriodUnits freq, Func<(LocalDateTime start, LocalDateTime? end), IEnumerable<LocalDateTime>> inner, int[] setPos, IsoDayOfWeek startOfWeek)
+            => arg => EnumerateWithSetPos(arg.start, arg.end, freq, inner, setPos, startOfWeek);
 
-        public static IEnumerable<LocalDateTime> EnumerateWithSetPos(LocalDateTime start, LocalDateTime? end, PeriodUnits freq, Func<(LocalDateTime start, LocalDateTime? end), IEnumerable<LocalDateTime>> inner, int[] setPos)
+        internal static IEnumerable<LocalDateTime> EnumerateWithSetPos(LocalDateTime start, LocalDateTime? end, PeriodUnits freq, Func<(LocalDateTime start, LocalDateTime? end), IEnumerable<LocalDateTime>> inner, int[] setPos, IsoDayOfWeek startOfWeek)
         {
             LocalDateTime? setPeriodStart = null;
             HashSet<int> by = [];
             int currentSetPos = 0;
 
-            foreach (var item in inner((FloorTo(start, freq), end)))
+            foreach (var item in inner((FloorTo(start, freq, startOfWeek), end)))
             {
                 // FloorTo won't work with weeks
-                var itemPeriodStart = FloorTo(item, freq);
+                var itemPeriodStart = FloorTo(item, freq, startOfWeek);
                 if (setPeriodStart != itemPeriodStart)
                 {
                     var nofEntries = inner((itemPeriodStart, itemPeriodStart.Plus(GetPeriod(freq)))).Count();
@@ -275,13 +171,13 @@ namespace AltRecur
             }
         }
 
-        internal static LocalDateTime GetStartOfWeekOne(LocalDateTime t, IsoDayOfWeek isoDayOfWeek)
+        internal static LocalDateTime GetStartOfWeekOne(LocalDateTime t, IsoDayOfWeek startOfWeek)
         {
-            var weekNo = GetWeekNo(t, isoDayOfWeek);
-            t = FloorTo(t, PeriodUnits.Days);
+            var weekNo = GetWeekNo(t, startOfWeek);
+            t = FloorTo(t, PeriodUnits.Days, startOfWeek);
             t = t.PlusWeeks(-weekNo + 1);
-            if (t.DayOfWeek != isoDayOfWeek)
-                t = t.Previous(isoDayOfWeek);
+            if (t.DayOfWeek != startOfWeek)
+                t = t.Previous(startOfWeek);
 
             return t;
         }
@@ -299,6 +195,9 @@ namespace AltRecur
 
         internal static LocalDateTime GetStartOfWeek(LocalDateTime t, IsoDayOfWeek startOfWeek)
         {
+            if (startOfWeek == IsoDayOfWeek.None)
+                throw new ArgumentException();
+
             var t0 = ((int)startOfWeek) % 7;
             var t1 = ((int)t.DayOfWeek) % 7;
             return t.PlusDays(-((t1 + 7 - t0) % 7));
@@ -335,33 +234,30 @@ namespace AltRecur
             if (!rule.IsValid())
                 throw new FormatException();
 
+            var startOfWeek = rule.WeekStart ?? IsoDayOfWeek.Monday;
             // The offset of the start of week relative to Monday (Tuesday = +1, ...)
-            var weekDayOffset = NodaTime.Period.FromDays((int)(rule.WeekStart ?? IsoDayOfWeek.Monday) - (int)IsoDayOfWeek.Monday);
-
+            var weekDayOffset = NodaTime.Period.FromDays((int)startOfWeek - (int)IsoDayOfWeek.Monday);
             IEnumerable<IRuleIncrementor> components = [new RuleIncrementor(
-                t => FindCurrentOrNextInterval(rule.DtStart, t, rule.Frequency.ToNodaPeriodUnits(), rule.Interval, (rule.Frequency == RuleFrequency.Weekly) ? weekDayOffset : null))];
+                t => FindCurrentOrNextInterval(rule.DtStart, t, rule.Frequency.ToNodaPeriodUnits(), rule.Interval, (rule.Frequency == RuleFrequency.Weekly) ? weekDayOffset : null, startOfWeek))];
 
-            PeriodUnits GetByDayOuterUnit()
+            RuleFrequency GetByDayOuterFreq()
                 => rule.Frequency switch
                 {
-                    RuleFrequency.Monthly => PeriodUnits.Months,
-                    RuleFrequency.Yearly when (rule.ByMonth != null) => PeriodUnits.Months,
-                    RuleFrequency.Yearly => PeriodUnits.Years,
-                    _ => PeriodUnits.None
+                    RuleFrequency.Monthly => RuleFrequency.Monthly,
+                    RuleFrequency.Yearly when (rule.ByMonth != null) => RuleFrequency.Monthly,
+                    RuleFrequency.Yearly => RuleFrequency.Yearly,
+                    _ => RuleFrequency.Undefined
                 };
 
-            RuleIncrementor BuildByComponent(ByPart byPart, IReadOnlySet<int> byValues)
+            IRuleIncrementor BuildByComponent(ByPart byPart, IReadOnlySet<int> byValues)
             {
                 var dsr = RecurrenceExpandRules.ByPartDescriptors[byPart];
 
-                Func<LocalDateTime, LocalDateTimePeriod> f = byPart switch
+                return byPart switch
                 {
-                    ByPart.ByWeekNo => t => RuleEnumerationUtils.FindCurrentOrNextByWeekNo(t, byValues.ToArray(), rule.WeekStart ?? IsoDayOfWeek.Monday),
-                    ByPart.ByDay => t => RuleEnumerationUtils.FindCurrentOrNextByDay(t, GetByDayOuterUnit(), rule.ByDay!.ToArray()),
-                    _ => t => RuleEnumerationUtils.FindCurrentOrNextBy(t, dsr.OuterUnit, dsr.InnerUnit, byValues.ToArray(), dsr.SupportNegative)
+                    ByPart.ByDay => ByPartIncrementor.BuildByDay(rule.ByDay!.ToArray(), GetByDayOuterFreq(), startOfWeek),
+                    _ => ByPartIncrementor.Build(byValues.ToArray(), startOfWeek, byPart)
                 };
-
-                return new RuleIncrementor(f);
             }
 
             var byRules = rule.GetByRules();
@@ -371,17 +267,14 @@ namespace AltRecur
                 .Where(byRule => rule.hasTime || !RecurrenceExpandRules.ByPartDescriptors[byRule.Key].IsTime)
                 .Select(byRule => BuildByComponent(byRule.Key, byRule.Value)));
 
-            RuleIncrementor BuildFallbackExpandByComponent(ByPart byPart)
+            IRuleIncrementor BuildFallbackExpandByComponent(ByPart byPart)
             {
                 var dsr = RecurrenceExpandRules.ByPartDescriptors[byPart];
-                switch (byPart)
+                return byPart switch
                 {
-                    case ByPart.ByDay:
-                        return new RuleIncrementor(t => RuleEnumerationUtils.FindCurrentOrNextByDay(t, PeriodUnits.None, [(rule.DtStart.DayOfWeek, null)]));
-
-                    default:
-                        return new RuleIncrementor(t => RuleEnumerationUtils.FindCurrentOrNextBy(t, dsr.OuterUnit, dsr.InnerUnit, [GetUnitFromLocalDateTime(rule.DtStart, dsr.InnerUnit)]));
-                }
+                    ByPart.ByDay => ByPartIncrementor.BuildByDay([(rule.DtStart.DayOfWeek, null)], RuleFrequency.Undefined, startOfWeek),
+                    _ => ByPartIncrementor.Build([GetUnitFromLocalDateTime(rule.DtStart, dsr.InnerUnit)], startOfWeek, byPart)
+                };
             }
 
             var missingByPartsWithExpansion = RecurrenceExpandRules.FallbackRules
@@ -394,7 +287,7 @@ namespace AltRecur
             var enumFactory = Enumerate(components.ToArray());
 
             if (rule.BySetPos != null)
-                enumFactory = EnumerateWithSetPos(rule.Frequency.ToNodaPeriodUnits(), enumFactory, rule.BySetPos.ToArray());
+                enumFactory = EnumerateWithSetPos(rule.Frequency.ToNodaPeriodUnits(), enumFactory, rule.BySetPos.ToArray(), startOfWeek);
 
             if (rule.Count is not null)
                 enumFactory = EnumerateWithCount(rule.DtStart, enumFactory, rule.Count.Value);
