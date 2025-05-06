@@ -13,34 +13,157 @@ namespace Ical.Net.Evaluation;
 
 public class RecurrencePatternEvaluator(RecurrencePattern pattern) : Evaluator
 {
-    private struct BySet<T>
+    private class ByDescriptor
     {
-        public IEnumerable<T> Values;
+        /// <summary>
+        /// Minimum value for entries in the BY* rule.
+        /// </summary>
+        public int MinValue { get; set; }
 
-        public bool IsProvided;
+        /// <summary>
+        /// Maximum value for entries in the BY* rule.
+        /// </summary>
+        public int MaxValue { get; set; }
 
-        public bool IsSorted;
+        /// <summary>
+        /// Does the BY* rule support negtive values?
+        /// </summary>
+        public bool AllowNegative { get; set; }
 
-        public bool HasNegative;
+        /// <summary>
+        /// Get the number of values of the given BY* rule that fit into the given date/time's period.
+        /// Is only set if the number if items is dynamic, i.e. if it can change in different periods.
+        /// E.g. BYMONTHDAY this would be the number of days in the given month of the given date.
+        /// </summary>
+        public Func<CalDateTime, int>? DynamicOuterPeriodCount { get; set; }
 
-        public int RelativeTo { get; set; }
+        /// <summary>
+        /// Get the part of the given date/time that is relevant for this BY* rule.
+        /// E.g. for BYMONTH, this would be the month.
+        /// </summary>
+        public Func<CalDateTime, int> GetValue { get; set; } = null!;
+
+        /// <summary>
+        /// Function that returns a new CalDateTime that has the value corresponding to
+        /// this BY* rule set to the given value.
+        /// E.g. for BYMONTH, this function would set the month part of the given value.
+        /// </summary>
+        public Func<CalDateTime, int, CalDateTime> WithValue { get; set; } = null!;
+
+        /// <summary>
+        /// Indicates whether this BY* rule is a time value (e.g. BYHOUR, BYMINUTE, BYSECOND).
+        /// </summary>
+        public bool IsTime { get; set; }
     }
 
-    private static IEnumerable<int> GetNormalizedBySet(BySet<int> set, Func<int> count)
+    private static readonly ByDescriptor ByMonthDsr = new()
+    {
+        MinValue = 1,
+        MaxValue = 12,
+        AllowNegative = false,
+        GetValue = d => d.Month,
+        DynamicOuterPeriodCount = d => Calendar!.GetMonthsInYear(d.Year),
+        WithValue = (d, v) => d.AddMonths(-d.Month + v),
+    };
+
+    private static readonly Func<DayOfWeek, ByDescriptor> ByWeekNoDsr = (DayOfWeek firstDayOfWeek) => new()
+    {
+        MinValue = 1,
+        MaxValue = 53,
+        AllowNegative = true,
+        DynamicOuterPeriodCount = d => Calendar!.GetDaysInYear(Calendar!.GetIso8601YearOfWeek(d, firstDayOfWeek)),
+    };
+
+    private static readonly ByDescriptor ByYearDayDsr = new()
+    {
+        MinValue = 1,
+        MaxValue = 366,
+        AllowNegative = true,
+        GetValue = d => d.DayOfYear,
+        DynamicOuterPeriodCount = d => Calendar!.GetDaysInYear(d.Year),
+        WithValue = (d, v) => d.AddDays(-d.DayOfYear + v),
+    };
+
+    private static readonly ByDescriptor ByMonthDayDsr = new()
+    {
+        MinValue = 1,
+        MaxValue = 31,
+        AllowNegative = true,
+        GetValue = d => d.Day,
+        DynamicOuterPeriodCount = d => Calendar!.GetDaysInMonth(d.Year, d.Month),
+        WithValue = (d, v) => d.AddDays(-d.Day + v),
+    };
+
+    private static readonly ByDescriptor ByDayDsr = new()
+    {  };
+
+    private static readonly ByDescriptor ByHourDsr = new()
+    {
+        MinValue = 0,
+        MaxValue = 23,
+        AllowNegative = false,
+        GetValue = d => d.Hour,
+        WithValue = (d, v) => d.AddHours(-d.Hour + v),
+        IsTime = true,
+    };
+
+    private static readonly ByDescriptor ByMinuteDsr = new()
+    {
+        MinValue = 0,
+        MaxValue = 59,
+        AllowNegative = false,
+        GetValue = d => d.Minute,
+        WithValue = (d, v) => d.AddMinutes(-d.Minute + v),
+        IsTime = true,
+    };
+
+    private static readonly ByDescriptor BySecondDsr = new()
+    {
+        MinValue = 0,
+        MaxValue = 60,
+        AllowNegative = false,
+        GetValue = d => d.Second,
+        WithValue = (d, v) => d.AddSeconds(-d.Second + v),
+        IsTime = true,
+    };
+
+    private static readonly ByDescriptor BySetPosDsr = new()
+    {
+        MinValue = 1,
+        MaxValue = 366,
+        AllowNegative = true,
+    };
+
+    private struct BySet<T>
+    {
+        public IEnumerable<T> Values { get; set; }
+
+        public bool IsProvided { get; set; }
+
+        public bool IsSorted { get; set; }
+
+        public bool HasNegative { get; set; }
+
+        public ByDescriptor Dsr { get; set; }
+    }
+
+    private static IEnumerable<int> GetNormalizedBySet(BySet<int> set, Func<int>? count, bool asSet)
     {
         if (!set.IsProvided || (set.IsSorted && !set.HasNegative))
             return set.Values;
 
         var res = set.Values.AsEnumerable();
+        if (!set.HasNegative)
+            return set.IsSorted ? res : new SortedSet<int>(res);
 
-        if (set.HasNegative)
-        {
-            var n = count();
-            var rel = set.RelativeTo;
-            res = res.Select(x => (x >= 0) ? x : (n + x + 1)).Where(x => x >= rel);
-        }
+        var n = count!();
+        var rel = set.Dsr.MinValue;
+        res = res.Select(x => (x >= 0) ? x : (n + x + 1)).Where(x => x >= rel);
 
-        return set.IsSorted ? res : new SortedSet<int>(res);
+        if (asSet || !set.IsSorted)
+            res = new SortedSet<int>(res);
+
+        return res;
     }
 
     private class PreparedPattern
@@ -85,10 +208,10 @@ public class RecurrencePatternEvaluator(RecurrencePattern pattern) : Evaluator
     {
         var freq = pattern.Frequency;
 
-        BySet<T> AsBySet<T>(IList<T> values, Func<T, bool>? isPositivePredicate, int relativeTo)
+        BySet<T> AsBySet<T>(IList<T> values, Func<T, bool>? isPositivePredicate, ByDescriptor dsr)
         {
             if (values is null or { Count: <= 0 })
-                return new() { Values = [], IsProvided = false, IsSorted = true, HasNegative = false, };
+                return new() { Values = [], IsProvided = false, IsSorted = true, HasNegative = false, Dsr = dsr };
 
             (var hasPositive, var hasNegative) =
                 (isPositivePredicate == null)
@@ -106,30 +229,41 @@ public class RecurrencePatternEvaluator(RecurrencePattern pattern) : Evaluator
                 IsProvided = true,
                 IsSorted = isSorted,
                 HasNegative = hasNegative,
-                RelativeTo = relativeTo,
+                Dsr = dsr,
             };
         }
 
-        BySet<WeekDay> AsByDaySet(IList<WeekDay> values) => AsBySet(values, null, 1);
-        BySet<int> AsByIntSet(IList<int> values, int relativeTo) => AsBySet(values, x => x > 0, relativeTo);
+        BySet<WeekDay> AsByDaySet(IList<WeekDay> values) => AsBySet(values, null, ByDayDsr);
+        BySet<int> AsByIntSet(IList<int> values, ByDescriptor dsr)
+        {
+            if (values.Any(
+                v => (!dsr.AllowNegative && (v < 0))
+                || (Math.Abs(v) < dsr.MinValue)
+                || (Math.Abs(v) > dsr.MaxValue)))
+            {
+                throw new EvaluationException("illegal by value");
+            }
 
-        BySet<T> SingleFallback<T>(T v, int relativeTo) => new() { Values = [v], IsProvided = true, IsSorted = true, RelativeTo = relativeTo };
+            return AsBySet(values, x => x >= 0, dsr);
+        }
 
-        var byMonth = AsByIntSet(pattern.ByMonth, 1);
-        var byWeekNo = AsByIntSet(pattern.ByWeekNo, 1);
-        var byYearDay = AsByIntSet(pattern.ByYearDay, 1);
-        var byMonthDay = AsByIntSet(pattern.ByMonthDay, 1);
+        BySet<T> SingleFallback<T>(T v, ByDescriptor dsr) => new() { Values = [v], IsProvided = true, IsSorted = true, Dsr = dsr };
+
+        var byMonth = AsByIntSet(pattern.ByMonth, ByMonthDsr);
+        var byWeekNo = AsByIntSet(pattern.ByWeekNo, ByWeekNoDsr(pattern.FirstDayOfWeek));
+        var byYearDay = AsByIntSet(pattern.ByYearDay, ByYearDayDsr);
+        var byMonthDay = AsByIntSet(pattern.ByMonthDay, ByMonthDayDsr);
         var byDay = AsByDaySet(pattern.ByDay);
-        var byHour = AsByIntSet(pattern.ByHour, 0);
-        var byMinute = AsByIntSet(pattern.ByMinute, 0);
-        var bySecond = AsByIntSet(pattern.BySecond, 0);
-        var bySetPosition = AsByIntSet(pattern.BySetPosition, 1);
+        var byHour = AsByIntSet(pattern.ByHour, ByHourDsr);
+        var byMinute = AsByIntSet(pattern.ByMinute, ByMinuteDsr);
+        var bySecond = AsByIntSet(pattern.BySecond, BySecondDsr);
+        var bySetPosition = AsByIntSet(pattern.BySetPosition, BySetPosDsr);
 
         if (referenceDate.HasTime)
         {
-            if (freq > FrequencyType.Secondly && !bySecond.IsProvided) bySecond = SingleFallback(referenceDate.Second, 0);
-            if (freq > FrequencyType.Minutely && !byMinute.IsProvided) byMinute = SingleFallback(referenceDate.Minute, 0);
-            if (freq > FrequencyType.Hourly && !byHour.IsProvided) byHour = SingleFallback(referenceDate.Hour, 0);
+            if (freq > FrequencyType.Secondly && !bySecond.IsProvided) bySecond = SingleFallback(referenceDate.Second, BySecondDsr);
+            if (freq > FrequencyType.Minutely && !byMinute.IsProvided) byMinute = SingleFallback(referenceDate.Minute, ByMinuteDsr);
+            if (freq > FrequencyType.Hourly && !byHour.IsProvided) byHour = SingleFallback(referenceDate.Hour, ByHourDsr);
         }
         else
         {
@@ -138,9 +272,9 @@ public class RecurrencePatternEvaluator(RecurrencePattern pattern) : Evaluator
             // These rule parts MUST be ignored in RECUR value that violate the
             // above requirement(e.g., generated by applications that pre - date
             // this revision of iCalendar).
-            bySecond = SingleFallback(0, 0);
-            byMinute = SingleFallback(0, 0);
-            byHour = SingleFallback(0, 0);
+            bySecond = SingleFallback(0, BySecondDsr);
+            byMinute = SingleFallback(0, ByMinuteDsr);
+            byHour = SingleFallback(0, ByHourDsr);
         }
 
         // If BYDAY, BYYEARDAY, or BYWEEKNO is specified, then
@@ -153,20 +287,20 @@ public class RecurrencePatternEvaluator(RecurrencePattern pattern) : Evaluator
             // then let's add BYDAY to BYWEEKNO.
             // NOTE: fixes YearlyByWeekNoX() handling
             if (freq == FrequencyType.Weekly || (byWeekNo.IsProvided && !byMonthDay.IsProvided && !byYearDay.IsProvided))
-                byDay = SingleFallback(new WeekDay(referenceDate.DayOfWeek), 1);
+                byDay = SingleFallback(new WeekDay(referenceDate.DayOfWeek), ByDayDsr);
 
             // If BYMONTHDAY is not specified,
             // default to the current day of month.
             // NOTE: fixes YearlyByMonth1() handling, added BYYEARDAY exclusion
             // to fix YearlyCountByYearDay1() handling
             if (freq > FrequencyType.Weekly && !byWeekNo.IsProvided && !byYearDay.IsProvided && !byMonthDay.IsProvided)
-                byMonthDay = SingleFallback(referenceDate.Day, 1);
+                byMonthDay = SingleFallback(referenceDate.Day, ByMonthDayDsr);
 
             // If BYMONTH is not specified, default to
             // the current month.
             // NOTE: fixes YearlyCountByYearDay1() handling
             if (freq > FrequencyType.Monthly && !byWeekNo.IsProvided && !byYearDay.IsProvided && !byMonth.IsProvided)
-                byMonth = SingleFallback(referenceDate.Month, 1);
+                byMonth = SingleFallback(referenceDate.Month, ByMonthDsr);
         }
 
         return new PreparedPattern
@@ -373,14 +507,14 @@ public class RecurrencePatternEvaluator(RecurrencePattern pattern) : Evaluator
         var expandContext = new ExpandContext() { DatesFullyExpanded = false };
 
         IEnumerable<CalDateTime> dates = [ date ];
-        dates = GetMonthVariants(dates, pattern, expandBehaviors[0]);
+        dates = GetByVariants(dates, pattern.ByMonth, expandBehaviors[0], ref expandContext);
         dates = GetWeekNoVariants(dates, pattern, expandBehaviors[1], ref expandContext);
-        dates = GetYearDayVariants(dates, pattern, expandBehaviors[2], ref expandContext);
-        dates = GetMonthDayVariants(dates, pattern, expandBehaviors[3], ref expandContext);
+        dates = GetByVariants(dates, pattern.ByYearDay, expandBehaviors[2], ref expandContext);
+        dates = GetByVariants(dates, pattern.ByMonthDay, expandBehaviors[3], ref expandContext);
         dates = GetDayVariants(dates, pattern, expandBehaviors[4], ref expandContext);
-        dates = GetHourVariants(dates, pattern, expandBehaviors[5]);
-        dates = GetMinuteVariants(dates, pattern, expandBehaviors[6]);
-        dates = GetSecondVariants(dates, pattern, expandBehaviors[7]);
+        dates = GetByVariants(dates, pattern.ByHour, expandBehaviors[5], ref expandContext);
+        dates = GetByVariants(dates, pattern.ByMinute, expandBehaviors[6], ref expandContext);
+        dates = GetByVariants(dates, pattern.BySecond, expandBehaviors[7], ref expandContext);
         dates = ApplySetPosRules(dates, pattern);
 
         return dates;
@@ -405,32 +539,8 @@ public class RecurrencePatternEvaluator(RecurrencePattern pattern) : Evaluator
             dates = dates.ToList();
         }
 
-        var bySetPos = GetNormalizedBySet(pattern.BySetPosition, () => dates.Count());
+        var bySetPos = GetNormalizedBySet(pattern.BySetPosition, () => dates.Count(), asSet: true);
         return dates.Where((d, i) => (i > 0) && bySetPos.Contains(i + 1));
-    }
-
-    /// <summary>
-    /// Applies BYMONTH rules specified in this Recur instance to the specified date list. 
-    /// If no BYMONTH rules are specified, the date list is returned unmodified.
-    /// </summary>
-    /// <param name="dates">The list of dates to which the BYMONTH rules will be applied.</param>
-    /// <param name="pattern"></param>
-    /// <param name="expand"></param>
-    /// <returns>The modified list of dates after applying the BYMONTH rules.</returns>
-    private static IEnumerable<CalDateTime> GetMonthVariants(IEnumerable<CalDateTime> dates, PreparedPattern pattern, bool? expand)
-    {
-        if (expand == null || !pattern.ByMonth.IsProvided)
-            return dates;
-
-        if (expand.Value)
-        {
-            // Expand behavior
-            return dates
-                .SelectMany(d => pattern.ByMonth.Values.Select(month => d.AddMonths(month - d.Month)));
-        }
-
-        // Limit behavior
-        return dates.Where(date => pattern.ByMonth.Values.Contains(date.Month));
     }
 
     /// <summary>
@@ -454,7 +564,7 @@ public class RecurrencePatternEvaluator(RecurrencePattern pattern) : Evaluator
 
         // Apply BYMONTH limit behavior, as we might have expanded over month/year boundaries
         // in this method and BYMONTH has already been applied before, so wouldn't be again.
-        return GetMonthVariants(weekNoDates, pattern, expand: false);
+        return GetByVariants(weekNoDates, pattern.ByMonth, expand: false, ref expandContext);
     }
 
     private static IEnumerable<CalDateTime> GetWeekNoVariantsExpanded(IEnumerable<CalDateTime> dates, PreparedPattern pattern)
@@ -503,110 +613,6 @@ public class RecurrencePatternEvaluator(RecurrencePattern pattern) : Evaluator
             .OrderBy(x => x)
             .ToList();
     }
-
-    /// <summary>
-    /// Applies BYYEARDAY rules specified in this Recur instance to the specified date list. 
-    /// If no BYYEARDAY rules are specified, the date list is returned unmodified.
-    /// </summary>
-    /// <param name="dates">The list of dates to which the BYYEARDAY rules will be applied.</param>
-    /// <returns>The modified list of dates after applying the BYYEARDAY rules.</returns>
-    private static IEnumerable<CalDateTime> GetYearDayVariants(IEnumerable<CalDateTime> dates, PreparedPattern pattern, bool? expand, ref ExpandContext expandContext)
-    {
-        if (expand is null || !pattern.ByYearDay.IsProvided)
-            return dates;
-
-        if ((expand == true) && !expandContext.DatesFullyExpanded)
-        {
-            expandContext.DatesFullyExpanded = true;
-            return GetYearDayVariantsExpanded(dates, pattern);
-        }
-
-        // Limit behavior
-        return GetYearDayVariantsLimited(dates, pattern);
-    }
-
-    private static IEnumerable<CalDateTime> ExpandBy(IEnumerable<CalDateTime> dates, Func<CalDateTime, int> count, BySet<int> by, Func<CalDateTime, int, CalDateTime> f)
-    {
-        foreach (var date in dates)
-        {
-            var n = count(date);
-            var byValues = GetNormalizedBySet(by, () => n)
-                .Where(x => (x >= by.RelativeTo) && ((x - by.RelativeTo) < n));
-
-            var res = byValues.Select(b => f(date, b));
-
-            foreach (var d in res)
-                yield return d;
-        }
-    }
-
-    private static IEnumerable<CalDateTime> GetYearDayVariantsExpanded(IEnumerable<CalDateTime> dates, PreparedPattern pattern)
-        => ExpandBy(
-            dates: dates,
-            by: pattern.ByYearDay,
-            count: date => Calendar.GetDaysInYear(date.Year),
-            f: (date, yearDay) => date.AddDays(-date.DayOfYear + yearDay));
-
-    private static IEnumerable<CalDateTime> GetYearDayVariantsLimited(IEnumerable<CalDateTime> dates, PreparedPattern pattern)
-    {
-        foreach (var date in dates)
-        {
-            var candidates =
-                from yearDay in pattern.ByYearDay.Values
-                let newDate = yearDay > 0
-                    ? date.AddDays(-date.DayOfYear + yearDay)
-                    : date.AddDays(-date.DayOfYear + 1).AddYears(1).AddDays(yearDay)
-                select newDate;
-
-            if (candidates.Contains(date))
-                yield return date;
-        }
-    }
-
-    /// <summary>
-    /// Applies BYMONTHDAY rules specified in this Recur instance to the specified date list. 
-    /// If no BYMONTHDAY rules are specified, the date list is returned unmodified.
-    /// </summary>
-    /// <param name="dates">The list of dates to which the BYMONTHDAY rules will be applied.</param>
-    /// <returns>The modified list of dates after applying the BYMONTHDAY rules.</returns>
-    private static IEnumerable<CalDateTime> GetMonthDayVariants(IEnumerable<CalDateTime> dates, PreparedPattern pattern, bool? expand, ref ExpandContext expandContext)
-    {
-        if (expand == null || !pattern.ByMonthDay.IsProvided)
-            return dates;
-
-        if (expand.Value && !expandContext.DatesFullyExpanded)
-        {
-            expandContext.DatesFullyExpanded = true;
-            return GetMonthDayVariantsExpanded(dates, pattern);
-        }
-
-        // limit behavior
-        return GetMonthDayVariantsLimited(dates, pattern);
-    }
-
-    private static IEnumerable<CalDateTime> GetMonthDayVariantsLimited(IEnumerable<CalDateTime> dates, PreparedPattern pattern)
-    {
-        foreach (var date in dates)
-        {
-            var daysInMonth = Calendar.GetDaysInMonth(date.Year, date.Month);
-            foreach (var monthDay in pattern.ByMonthDay.Values)
-            {
-                var byMonthDay = (monthDay > 0) ? monthDay : (daysInMonth + monthDay + 1);
-                if (date.Day == byMonthDay)
-                {
-                    yield return date;
-                    break;
-                }
-            }
-        }
-    }
-
-    private static IEnumerable<CalDateTime> GetMonthDayVariantsExpanded(IEnumerable<CalDateTime> dates, PreparedPattern pattern)
-        => ExpandBy(
-            dates: dates,
-            by: pattern.ByMonthDay,
-            count: date => Calendar.GetDaysInMonth(date.Year, date.Month),
-            f: (date, monthDay) => date.AddDays(-date.Day + monthDay));
 
     /// <summary>
     /// Applies BYDAY rules specified in this Recur instance to the specified date list. 
@@ -779,84 +785,46 @@ public class RecurrencePatternEvaluator(RecurrencePattern pattern) : Evaluator
         return dates.Skip(offset.Value - 1).Take(1);
     }
 
-    /// <summary>
-    /// Applies BYHOUR rules specified in this Recur instance to the specified date list. 
-    /// If no BYHOUR rules are specified, the date list is returned unmodified.
-    /// </summary>
-    /// <param name="dates">The list of dates to which the BYHOUR rules will be applied.</param>
-    /// <param name="pattern"></param>
-    /// <param name="expand"></param>
-    /// <returns>The modified list of dates after applying the BYHOUR rules.</returns>
-    private static IEnumerable<CalDateTime> GetHourVariants(IEnumerable<CalDateTime> dates, PreparedPattern pattern, bool? expand)
+    private static IEnumerable<CalDateTime> ExpandOrLimitBy(IEnumerable<CalDateTime> dates, BySet<int> by, bool expand)
     {
-        if (expand == null || !pattern.ByHour.IsProvided)
-            return dates;
-
-        if (expand.Value)
+        foreach (var date in dates)
         {
-            // Expand behavior
-            return ExpandBy(
-                dates: dates,
-                by: pattern.ByHour,
-                count: date => 24,
-                f: (date, v) => date.AddHours(-date.Hour + v));
+            // If the number of items is dynamic, we calculate it here, so we can
+            // convert negative values and filter out out-of-range values.
+            // If the values are static, we neither need to convert, nor to filter.
+            var n = by.Dsr.DynamicOuterPeriodCount?.Invoke(date) ?? 0;
+            var byValues = GetNormalizedBySet(by, (n == 0) ? null : () => n, asSet: false);
+
+            if (n > 0)
+                byValues = byValues.Where(x => (x >= by.Dsr.MinValue) && ((x - by.Dsr.MinValue) < n));
+
+            if (expand)
+            {
+                var res = byValues.Select(b => by.Dsr.WithValue(date, b));
+
+                foreach (var d in res)
+                    yield return d;
+            }
+            else
+            {
+                if (byValues.Contains(by.Dsr.GetValue(date)))
+                    yield return date;
+            }
         }
-        // Limit behavior
-        return dates.Where(date => pattern.ByHour.Values.Contains(date.Hour));
     }
 
     /// <summary>
-    /// Applies BYMINUTE rules specified in this Recur instance to the specified date list. 
-    /// If no BYMINUTE rules are specified, the date list is returned unmodified.
+    /// Applies the given BY rule to the specified date list. 
+    /// If this BY rule isn't provided, the date list is returned unmodified.
     /// </summary>
-    /// <param name="dates">The list of dates to which the BYMINUTE rules will be applied.</param>
-    /// <param name="pattern"></param>
-    /// <param name="expand"></param>
-    /// <returns>The modified list of dates after applying the BYMINUTE rules.</returns>
-    private static IEnumerable<CalDateTime> GetMinuteVariants(IEnumerable<CalDateTime> dates, PreparedPattern pattern, bool? expand)
+    /// <returns>The modified list of dates after applying the BY rules.</returns>
+    private static IEnumerable<CalDateTime> GetByVariants(IEnumerable<CalDateTime> dates, BySet<int> by, bool? expand, ref ExpandContext expandContext)
     {
-        if (expand == null || !pattern.ByMinute.IsProvided)
+        if (expand == null || !by.IsProvided)
             return dates;
 
-        if (expand.Value)
-        {
-            // Expand behavior
-            return ExpandBy(
-                dates: dates,
-                by: pattern.ByMinute,
-                count: date => 60,
-                f: (date, v) => date.AddMinutes(-date.Minute + v));
-        }
-
-        // Limit behavior
-        return dates.Where(date => pattern.ByMinute.Values.Contains(date.Minute));
-    }
-
-    /// <summary>
-    /// Applies BYSECOND rules specified in this Recur instance to the specified date list. 
-    /// If no BYSECOND rules are specified, the date list is returned unmodified.
-    /// </summary>
-    /// <param name="dates">The list of dates to which the BYSECOND rules will be applied.</param>
-    /// <param name="pattern"></param>
-    /// <param name="expand"></param>
-    /// <returns>The modified list of dates after applying the BYSECOND rules.</returns>
-    private static IEnumerable<CalDateTime> GetSecondVariants(IEnumerable<CalDateTime> dates, PreparedPattern pattern, bool? expand)
-    {
-        if (expand == null || !pattern.BySecond.IsProvided)
-            return dates;
-
-        if (expand.Value)
-        {
-            // Expand behavior
-            return ExpandBy(
-                dates: dates,
-                by: pattern.BySecond,
-                count: date => 60,
-                f: (date, v) => date.AddSeconds(-date.Second + v));
-        }
-
-        // Limit behavior
-        return dates.Where(date => pattern.BySecond.Values.Contains(date.Second));
+        var doExpand = expand.Value && (by.Dsr.IsTime || !expandContext.DatesFullyExpanded);
+        return ExpandOrLimitBy(dates, by, doExpand);
     }
 
     /// <summary>
