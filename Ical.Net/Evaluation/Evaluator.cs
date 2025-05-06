@@ -12,7 +12,7 @@ namespace Ical.Net.Evaluation;
 
 public abstract class Evaluator : IEvaluator
 {
-    protected void IncrementDate(ref CalDateTime dt, RecurrencePattern pattern, int interval)
+    protected static void IncrementDate(ref CalDateTime dt, FrequencyType frequency, DayOfWeek firstDayOfWeek, int interval)
     {
         if (interval == 0)
             return;
@@ -20,7 +20,7 @@ public abstract class Evaluator : IEvaluator
         try
         {
             var old = dt;
-            switch (pattern.Frequency)
+            switch (frequency)
             {
                 case FrequencyType.Secondly:
                     dt = old.AddSeconds(interval);
@@ -35,7 +35,7 @@ public abstract class Evaluator : IEvaluator
                     dt = old.AddDays(interval);
                     break;
                 case FrequencyType.Weekly:
-                    dt = DateUtil.AddWeeks(old, interval, pattern.FirstDayOfWeek);
+                    dt = DateUtil.AddWeeks(old, interval, firstDayOfWeek);
                     break;
                 case FrequencyType.Monthly:
                     dt = old.AddDays(-old.Day + 1).AddMonths(interval);

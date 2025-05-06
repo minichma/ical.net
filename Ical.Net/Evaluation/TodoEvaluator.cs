@@ -78,7 +78,7 @@ public class TodoEvaluator : RecurringEvaluator
         }
         else
         {
-            IncrementDate(ref referenceDateTime, recur, -recur.Interval);
+            IncrementDate(ref referenceDateTime, recur.Frequency, recur.FirstDayOfWeek, -recur.Interval);
         }
     }
 

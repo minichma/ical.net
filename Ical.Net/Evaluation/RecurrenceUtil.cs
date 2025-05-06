@@ -46,51 +46,6 @@ internal static class RecurrenceUtil
         return periods.Select(p => new Occurrence(recurrable, p));
     }
 
-    public static bool?[] GetExpandBehaviorList(RecurrencePattern p)
-    {
-        // See the table in RFC 5545 Section 3.3.10 (Page 43).
-        switch (p.Frequency)
-        {
-            case FrequencyType.Minutely:
-                return [false, null, false, false, false, false, false, true, false];
-            case FrequencyType.Hourly:
-                return [false, null, false, false, false, false, true, true, false];
-            case FrequencyType.Daily:
-                return [false, null, null, false, false, true, true, true, false];
-            case FrequencyType.Weekly:
-                return [false, null, null, null, true, true, true, true, false];
-            case FrequencyType.Monthly:
-                {
-                    bool?[] row = [false, null, null, true, true, true, true, true, false];
-
-                    // Limit if BYMONTHDAY is present; otherwise, special expand for MONTHLY.
-                    if (p.ByMonthDay.Count > 0)
-                    {
-                        row[4] = false;
-                    }
-
-                    return row;
-                }
-            case FrequencyType.Yearly:
-                {
-                    bool?[] row = [true, true, true, true, true, true, true, true, false];
-
-                    // Limit if BYYEARDAY or BYMONTHDAY is present; otherwise,
-                    // special expand for WEEKLY if BYWEEKNO present; otherwise,
-                    // special expand for MONTHLY if BYMONTH present; otherwise,
-                    // special expand for YEARLY.
-                    if (p.ByYearDay.Count > 0 || p.ByMonthDay.Count > 0)
-                    {
-                        row[4] = false;
-                    }
-
-                    return row;
-                }
-            default:
-                return [false, null, false, false, false, false, false, false, false];
-        }
-    }
-
     public static IEnumerable<T> HandleEvaluationExceptions<T>(this IEnumerable<T> sequence)
         =>
             sequence
