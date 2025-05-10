@@ -5,6 +5,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Data;
 using System.Diagnostics;
 using System.Linq;
 using Ical.Net.DataTypes;
@@ -132,38 +133,118 @@ public class RecurrencePatternEvaluator(RecurrencePattern pattern) : Evaluator
         MinValue = 1,
         MaxValue = 366,
         AllowNegative = true,
+
+        // Provide dummy func so the Dsr is considered dynamic.
+        DynamicOuterPeriodCount = _ => throw new NotSupportedException(),
     };
 
-    private struct BySet<T>
+    private abstract class BySet<T>
     {
-        public IEnumerable<T> Values { get; set; }
+        public abstract IEnumerable<T> Values { get; }
 
-        public bool IsProvided { get; set; }
+        public abstract bool IsProvided { get; }
 
-        public bool IsSorted { get; set; }
+        public abstract ByDescriptor Dsr { get; }
 
-        public bool HasNegative { get; set; }
-
-        public ByDescriptor Dsr { get; set; }
+        public abstract IEnumerable<T> GetNormalized(int count);
     }
 
-    private static IEnumerable<int> GetNormalizedBySet(BySet<int> set, Func<int>? count, bool asSet)
+    private class EmptyBySet<T>(ByDescriptor dsr) : BySet<T>
     {
-        if (!set.IsProvided || (set.IsSorted && !set.HasNegative))
-            return set.Values;
+        public override IEnumerable<T> Values { get; } = [];
 
-        var res = set.Values.AsEnumerable();
-        if (!set.HasNegative)
-            return set.IsSorted ? res : new SortedSet<int>(res);
+        public override bool IsProvided => false;
 
-        var n = count!();
-        var rel = set.Dsr.MinValue;
-        res = res.Select(x => (x >= 0) ? x : (n + x + 1)).Where(x => x >= rel);
+        public override ByDescriptor Dsr => dsr;
 
-        if (asSet || !set.IsSorted)
-            res = new SortedSet<int>(res);
+        public override IEnumerable<T> GetNormalized(int count) => Values;
+    }
 
-        return res;
+    private class SingleStaticBySet<T>(T value, ByDescriptor dsr) : BySet<T>
+    {
+        public override IEnumerable<T> Values { get; } = [value];
+
+        public override bool IsProvided => true;
+
+        public override ByDescriptor Dsr => dsr;
+
+        public override IEnumerable<T> GetNormalized(int count) => Values;
+    }
+
+    /// <summary>
+    /// BY-set that is fully static, i.e. it does not need to be reevaluated (filterd, or negative values inverted) for each date.
+    /// </summary>
+    private class StaticBySet<T> : BySet<T>
+    {
+        private readonly IEnumerable<T> values;
+        private readonly ByDescriptor dsr;
+
+        public StaticBySet(IList<T> values, ByDescriptor dsr)
+        {
+            this.values = new SortedSet<T>(values);
+            this.dsr = dsr;
+        }
+
+        public override IEnumerable<T> Values => values;
+
+        public override bool IsProvided => true;
+
+        public override ByDescriptor Dsr => dsr;
+
+        public override IEnumerable<T> GetNormalized(int count) => Values;
+    }
+
+    private abstract class DynamicBySet<T>(ByDescriptor dsr) : BySet<T>
+    {
+        private readonly Dictionary<int, IEnumerable<T>> cache = new();
+
+        public override bool IsProvided => true;
+        public override ByDescriptor Dsr => dsr;
+
+        public override IEnumerable<T> GetNormalized(int count)
+            => cache.TryGetValue(count, out var res) ? res : (cache[count] = BuildNormalizedBySet(count));
+
+        protected abstract IEnumerable<T> BuildNormalizedBySet(int count);
+    }
+
+    private class DynamicIntBySet : DynamicBySet<int>
+    {
+        private readonly SortedSet<int> values;
+        private bool hasNegative;
+
+        public DynamicIntBySet(IList<int> values, ByDescriptor dsr)
+            : base(dsr)
+        {
+            this.values = new SortedSet<int>(values);
+            this.hasNegative = values.Any(x => x < 0);
+        }
+
+        public override IEnumerable<int> Values => values;
+
+        protected override IEnumerable<int> BuildNormalizedBySet(int count)
+        {
+            if (!hasNegative)
+                return values.Where(x => (x - Dsr.MinValue) < count);
+
+            return new SortedSet<int>(values
+                .Select(x => (x >= 0) ? x : (count + x + 1))
+                .Where(x => (x >= Dsr.MinValue) && ((x - Dsr.MinValue) < count))
+                .Distinct());
+        }
+    }
+
+    private class DynamicByDaySet : DynamicBySet<WeekDay>
+    {
+        private readonly IList<WeekDay> values;
+
+        public DynamicByDaySet(IList<WeekDay> values, ByDescriptor dsr) : base(dsr)
+        {
+            this.values = values;
+        }
+
+        public override IEnumerable<WeekDay> Values => values;
+
+        protected override IEnumerable<WeekDay> BuildNormalizedBySet(int count) => throw new NotImplementedException();
     }
 
     private class PreparedPattern
@@ -208,32 +289,30 @@ public class RecurrencePatternEvaluator(RecurrencePattern pattern) : Evaluator
     {
         var freq = pattern.Frequency;
 
-        BySet<T> AsBySet<T>(IList<T> values, Func<T, bool>? isPositivePredicate, ByDescriptor dsr)
+        BySet<int> AsBySet(IList<int> values, ByDescriptor dsr)
         {
             if (values is null or { Count: <= 0 })
-                return new() { Values = [], IsProvided = false, IsSorted = true, HasNegative = false, Dsr = dsr };
+                return new EmptyBySet<int>(dsr);
 
-            (var hasPositive, var hasNegative) =
-                (isPositivePredicate == null)
-                ? (true, true)
-                : values
-                .Select(v => isPositivePredicate(v))
-                .Aggregate((p: false, n: false), (acc, v) => (acc.p || v, acc.n || !v));
-
-            var isSorted = !hasPositive || !hasNegative;
-            var set = isSorted ? (ISet<T>)new SortedSet<T>(values) : new HashSet<T>(values);
-
-            return new()
+            if (dsr.DynamicOuterPeriodCount is null)
             {
-                Values = set,
-                IsProvided = true,
-                IsSorted = isSorted,
-                HasNegative = hasNegative,
-                Dsr = dsr,
-            };
+                return (values.Count == 1) ?
+                    new SingleStaticBySet<int>(values[0], dsr) :
+                    new StaticBySet<int>(values, dsr);
+            }
+
+            return new DynamicIntBySet(values, dsr);
         }
 
-        BySet<WeekDay> AsByDaySet(IList<WeekDay> values) => AsBySet(values, null, ByDayDsr);
+        BySet<WeekDay> AsByDaySet(IList<WeekDay> values)
+        {
+            var dsr = ByDayDsr;
+            if (values is null or { Count: <= 0 })
+                return new EmptyBySet<WeekDay>(dsr);
+
+            return new DynamicByDaySet(values, dsr);
+        }
+
         BySet<int> AsByIntSet(IList<int> values, ByDescriptor dsr)
         {
             if (values.Any(
@@ -244,10 +323,14 @@ public class RecurrencePatternEvaluator(RecurrencePattern pattern) : Evaluator
                 throw new EvaluationException("illegal by value");
             }
 
-            return AsBySet(values, x => x >= 0, dsr);
+            return AsBySet(values, dsr);
         }
 
-        BySet<T> SingleFallback<T>(T v, ByDescriptor dsr) => new() { Values = [v], IsProvided = true, IsSorted = true, Dsr = dsr };
+        BySet<WeekDay> SingleByDayFallback(WeekDay v, ByDescriptor dsr) => new SingleStaticBySet<WeekDay>(v, dsr);
+        BySet<int> SingleFallback(int v, ByDescriptor dsr) =>
+            (dsr.DynamicOuterPeriodCount == null)
+            ? new SingleStaticBySet<int>(v, dsr)
+            : new DynamicIntBySet(new[] { v }, dsr);
 
         var byMonth = AsByIntSet(pattern.ByMonth, ByMonthDsr);
         var byWeekNo = AsByIntSet(pattern.ByWeekNo, ByWeekNoDsr(pattern.FirstDayOfWeek));
@@ -287,7 +370,7 @@ public class RecurrencePatternEvaluator(RecurrencePattern pattern) : Evaluator
             // then let's add BYDAY to BYWEEKNO.
             // NOTE: fixes YearlyByWeekNoX() handling
             if (freq == FrequencyType.Weekly || (byWeekNo.IsProvided && !byMonthDay.IsProvided && !byYearDay.IsProvided))
-                byDay = SingleFallback(new WeekDay(referenceDate.DayOfWeek), ByDayDsr);
+                byDay = SingleByDayFallback(new WeekDay(referenceDate.DayOfWeek), ByDayDsr);
 
             // If BYMONTHDAY is not specified,
             // default to the current day of month.
@@ -532,14 +615,16 @@ public class RecurrencePatternEvaluator(RecurrencePattern pattern) : Evaluator
         if (!pattern.BySetPosition.IsProvided)
             return dates;
 
-        if (pattern.BySetPosition.HasNegative)
-        {
-            // Enumerate now, as enumeration happens inside GetNormalize() anyways.
-            // This way we need to enumerate only once.
-            dates = dates.ToList();
-        }
+        // TODO: Improve BYSETPOS
+        // Enumerate now, as enumeration happens inside GetNormalize() anyways.
+        // This way we need to enumerate only once.
+        dates = dates.ToList();
+        var n = dates.Count();
 
-        var bySetPos = GetNormalizedBySet(pattern.BySetPosition, () => dates.Count(), asSet: true);
+        var bySetPos = pattern.BySetPosition.GetNormalized(n);
+        if (bySetPos is not ISet<int>)
+            bySetPos = new HashSet<int>(bySetPos);
+
         return dates.Where((d, i) => (i > 0) && bySetPos.Contains(i + 1));
     }
 
@@ -793,10 +878,7 @@ public class RecurrencePatternEvaluator(RecurrencePattern pattern) : Evaluator
             // convert negative values and filter out out-of-range values.
             // If the values are static, we neither need to convert, nor to filter.
             var n = by.Dsr.DynamicOuterPeriodCount?.Invoke(date) ?? 0;
-            var byValues = GetNormalizedBySet(by, (n == 0) ? null : () => n, asSet: false);
-
-            if (n > 0)
-                byValues = byValues.Where(x => (x >= by.Dsr.MinValue) && ((x - by.Dsr.MinValue) < n));
+            var byValues = by.GetNormalized(n);
 
             if (expand)
             {
