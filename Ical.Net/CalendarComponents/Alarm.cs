@@ -1,12 +1,14 @@
-﻿//
+//
 // Copyright ical.net project maintainers and contributors.
 // Licensed under the MIT license.
 //
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Ical.Net.DataTypes;
 using Ical.Net.Evaluation;
+using Ical.Net.Utility;
 
 namespace Ical.Net.CalendarComponents;
 
@@ -70,17 +72,31 @@ public class Alarm : CalendarComponent
     }
 
     /// <summary>
-    /// Gets a list of alarm occurrences for the given recurring component, <paramref name="rc"/>
+    /// Gets a sequence of alarm occurrences for the given recurring component, <paramref name="rc"/>
     /// that occur at or after <paramref name="fromDate"/>.
     /// </summary>
-    public virtual IList<AlarmOccurrence> GetOccurrences(IRecurringComponent rc, CalDateTime? fromDate, EvaluationOptions? options)
+    public virtual IEnumerable<AlarmOccurrence> GetOccurrences(IRecurringComponent rc, CalDateTime? fromDate, EvaluationOptions? options)
+    {
+        var occurrences =
+            GetOccurrencesUnrepeated(rc, fromDate, options)
+            .Select(ao => new[] { ao }.Concat(GetRepeatedItems(ao)))
+
+            // Both, the original occurrences as well as the individual repeated sequences are ordered,
+            // so we can merge them in a streaming manner using OrderedNestedMergeMany.
+            // The outer, as well as the individual inner sequences will only be enumerated
+            // as far as necessary while the returned sequence is being enumerated.
+            // This way we can deal with both, an indefinite number of occurrences as well as a large numbers.
+            .OrderedNestedMergeMany();
+
+        return occurrences;
+    }
+
+    private IEnumerable<AlarmOccurrence> GetOccurrencesUnrepeated(IRecurringComponent rc, CalDateTime? fromDate, EvaluationOptions? options)
     {
         if (Trigger == null)
         {
-            return [];
+            yield break;
         }
-
-        var occurrences = new List<AlarmOccurrence>();
 
         // If the trigger is relative, it can recur right along with
         // the recurring items, otherwise, it happens once and
@@ -115,11 +131,11 @@ public class Alarm : CalendarComponent
                     else
                     {
                         throw new ArgumentException(
-                            "Alarm trigger is relative to the START of the occurrence; however, the occurence has no discernible end.");
-                    }
+                        "Alarm trigger is relative to the START of the occurrence; however, the occurence has no discernible end.");
+                }
                 }
 
-                occurrences.Add(new AlarmOccurrence(this, dt.Add(Trigger.Duration!.Value), rc));
+                yield return new AlarmOccurrence(this, dt.Add(Trigger.Duration!.Value), rc);
             }
         }
         else
@@ -127,15 +143,9 @@ public class Alarm : CalendarComponent
             var dt = Trigger?.DateTime?.Copy();
             if (dt != null)
             {
-                occurrences.Add(new AlarmOccurrence(this, dt, rc));
+                yield return new AlarmOccurrence(this, dt, rc);
             }
         }
-
-        // If a REPEAT and DURATION value were specified,
-        // then handle those repetitions here.
-        AddRepeatedItems(occurrences);
-
-        return occurrences;
     }
 
     /// <summary>
@@ -146,18 +156,15 @@ public class Alarm : CalendarComponent
     /// <param name="start">The earliest date/time to poll triggered alarms for.</param>
     /// <param name="options"></param>
     /// <returns>A list of <see cref="AlarmOccurrence"/> objects, each containing a triggered alarm.</returns>
-    public virtual IList<AlarmOccurrence> Poll(CalDateTime? start, EvaluationOptions? options = null)
+    public virtual IEnumerable<AlarmOccurrence> Poll(CalDateTime? start, EvaluationOptions? options = null)
     {
-        var results = new List<AlarmOccurrence>();
-
         // Evaluate the alarms to determine the recurrences
         if (Parent is not RecurringComponent rc)
         {
-            return results;
+            return [];
         }
 
-        results.AddRange(GetOccurrences(rc, start, options));
-        return results;
+        return GetOccurrences(rc, start, options);
     }
 
     /// <summary>
@@ -165,29 +172,20 @@ public class Alarm : CalendarComponent
     /// <c>DURATION</c> properties.  Each recurrence of the alarm will
     /// have its own set of generated repetitions.
     /// </summary>
-    private void AddRepeatedItems(List<AlarmOccurrence> occurrences)
+    private IEnumerable<AlarmOccurrence> GetRepeatedItems(AlarmOccurrence ao)
     {
-        var len = occurrences.Count;
-        for (var i = 0; i < len; i++)
+        if (ao.DateTime == null || ao.Component == null)
+            yield break;
+
+        var alarmTime = ao.DateTime.Copy();
+
+        for (var j = 0; j < Repeat; j++)
         {
-            var ao = occurrences[i];
-            if (ao.DateTime == null || ao.Component == null)
-            {
-                continue;
-            }
+            if (Duration != null)
+                alarmTime = alarmTime?.Add(Duration.Value);
 
-            var alarmTime = ao.DateTime.Copy();
-
-            for (var j = 0; j < Repeat; j++)
-            {
-                if (Duration != null)
-                    alarmTime = alarmTime?.Add(Duration.Value);
-
-                if (alarmTime != null)
-                {
-                    occurrences.Add(new AlarmOccurrence(this, alarmTime.Copy(), ao.Component));
-                }
-            }
+            if (alarmTime != null)
+                yield return new AlarmOccurrence(this, alarmTime.Copy(), ao.Component);
         }
     }
 }

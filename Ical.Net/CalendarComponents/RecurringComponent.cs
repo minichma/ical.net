@@ -10,6 +10,7 @@ using System.Runtime.Serialization;
 using Ical.Net.DataTypes;
 using Ical.Net.Evaluation;
 using Ical.Net.Proxies;
+using Ical.Net.Utility;
 
 namespace Ical.Net.CalendarComponents;
 
@@ -217,8 +218,8 @@ public abstract class RecurringComponent : UniqueComponent, IRecurringComponent
     public virtual IEnumerable<Occurrence> GetOccurrences(CalDateTime? startTime = null, EvaluationOptions? options = null)
         => RecurrenceUtil.GetOccurrences(this, startTime, options);
 
-    public virtual IList<AlarmOccurrence> PollAlarms() => PollAlarms(null, null);
+    public virtual IEnumerable<AlarmOccurrence> PollAlarms() => PollAlarms(null, null);
 
-    public virtual IList<AlarmOccurrence> PollAlarms(CalDateTime? startTime, CalDateTime? endTime)
-        => Alarms.SelectMany(a => a.Poll(startTime).TakeWhile(p => (endTime == null) || (p.Period?.StartTime < endTime))).ToList();
+    public virtual IEnumerable<AlarmOccurrence> PollAlarms(CalDateTime? startTime, CalDateTime? endTime)
+        => Alarms.Select(a => a.Poll(startTime).TakeWhile(p => (endTime == null) || (p.Period?.StartTime < endTime))).OrderedMergeMany();
 }

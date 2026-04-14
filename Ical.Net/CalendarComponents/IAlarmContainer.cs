@@ -1,4 +1,4 @@
-﻿//
+//
 // Copyright ical.net project maintainers and contributors.
 // Licensed under the MIT license.
 //
@@ -24,5 +24,5 @@ public interface IAlarmContainer
     /// <param name="startTime">The earliest allowable alarm occurrence to poll, or <c>null</c>.</param>
     /// <param name="endTime"></param>
     /// <returns>A List of <see cref="AlarmOccurrence"/> objects, one for each occurrence of the <see cref="Alarm"/>.</returns>
-    IList<AlarmOccurrence> PollAlarms(CalDateTime? startTime, CalDateTime? endTime);
+    IEnumerable<AlarmOccurrence> PollAlarms(CalDateTime? startTime, CalDateTime? endTime);
 }
